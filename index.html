@@ -659,13 +659,16 @@
                     // Mark as processing
                     await db.syncQueue.update(item.id, { status: 'processing' });
                     
-                    const collectionRef = dbFirestore.collection('users').doc(currentUser.uid).collection(item.tableName);
+                    const collectionRef = dbFirestore
+                        .collection('users')
+                        .doc(currentUser.uid)
+                        .collection(item.tableName);
                     
-                    if (item.action === 'create' || item.action === 'update') {
+                    if (item.action === 'create' || item.action === 'update' || item.action === 'add') {
                         // For create/update, we write to Firestore
                         // Convert ID to string for Firestore document ID
                         const docId = item.itemId.toString();
-                        await collectionRef.doc(docId).set(item.data, { merge: true });
+                        await collectionRef.doc(docId).set({ ...item.data }, { merge: true });
                         console.log(`Synced ${item.action} for ${item.tableName}/${item.itemId} to Firebase`);
                     } else if (item.action === 'delete') {
                         // For delete, remove from Firestore
@@ -704,7 +707,9 @@
             const tables = ['harvestFronts', 'routes', 'drivers', 'farms'];
             
             tables.forEach(tableName => {
-                dbFirestore.collection('users').doc(currentUser.uid).collection(tableName)
+                dbFirestore.collection('users')
+                    .doc(currentUser.uid)
+                    .collection(tableName)
                     .onSnapshot(snapshot => {
                         snapshot.docChanges().forEach(async change => {
                             const data = change.doc.data();
@@ -754,6 +759,9 @@
                     retries: 0
                 });
                 console.log(`Added ${action} operation to sync queue for ${tableName} id ${itemId}`);
+                if (navigator.onLine && firebase.apps.length && firebase.auth().currentUser) {
+                    await processSyncQueue();
+                }
             } catch (error) {
                 console.error('Erro ao adicionar à fila de sincronização:', error);
             }
@@ -1147,7 +1155,7 @@
                 provider.setCustomParameters({ prompt: 'select_account' });
                 
                 const ua = (navigator.userAgent || '').toLowerCase();
-                const isApp = ua.includes('hmapp/android') || (location.hostname === 'financeiro.app');
+                const isApp = ua.includes('hmapp/android');
                 
                 if (isApp) {
                     await firebase.auth().signInWithRedirect(provider);
@@ -1164,7 +1172,7 @@
                 } else if (error.code === 'auth/operation-not-allowed') {
                     msg = 'Login com Google não está habilitado no Firebase. Ative o provedor Google em Authentication > Sign-in method.';
                 } else if (error.code === 'auth/unauthorized-domain') {
-                    msg = 'Domínio não autorizado. Adicione financeiro.app, localhost:8081 e 127.0.0.1 em Authentication > Settings > Authorized domains no Firebase.';
+                    msg = 'Domínio não autorizado. Adicione gutemberggomes.github.io, localhost:8081 e 127.0.0.1 em Authentication > Settings > Authorized domains no Firebase.';
                 } else if (error.code === 'auth/cancelled-popup-request') {
                     msg = 'Outra tentativa de login está em andamento. Tente novamente.';
                 } else if (error.code === 'auth/popup-blocked') {
@@ -1186,7 +1194,7 @@
                 console.error('Redirect auth error:', error);
                 let msg = 'Erro ao finalizar login com Google via redirecionamento.';
                 if (error.code === 'auth/unauthorized-domain') {
-                    msg = 'Domínio não autorizado. Adicione financeiro.app em Authorized domains no Firebase.';
+                    msg = 'Domínio não autorizado. Adicione gutemberggomes.github.io em Authorized domains no Firebase.';
                 } else if (error.code === 'auth/user-cancelled') {
                     msg = 'Login cancelado. Tente novamente.';
                 }
@@ -6813,11 +6821,7 @@
                 
                 // Add to database
                 const id = await db.harvestFronts.add(newFront);
-                
-                // Add to sync queue for offline support
-                if (!navigator.onLine) {
-                    await addToSyncQueue('add', 'harvestFronts', id, { ...newFront, id });
-                }
+                await addToSyncQueue('add', 'harvestFronts', id, { ...newFront, id });
                 
                 hideLoading();
                 showToast('Frente de colheita adicionada com sucesso!', 'success');
@@ -6913,12 +6917,8 @@
                 // Update in database
                 await db.harvestFronts.update(frontId, updates);
                 
-                // Add to sync queue for offline support
-                if (!navigator.onLine) {
-                    // Get the full front object for syncing
-                    const fullFront = await db.harvestFronts.get(frontId);
-                    await addToSyncQueue('update', 'harvestFronts', frontId, fullFront);
-                }
+                const fullFront = await db.harvestFronts.get(frontId);
+                await addToSyncQueue('update', 'harvestFronts', frontId, fullFront);
                 
                 hideLoading();
                 showToast('Frente de colheita atualizada com sucesso!', 'success');
@@ -6949,12 +6949,8 @@
                         // Update in database
                         await db.harvestFronts.update(frontId, updates);
                         
-                        // Add to sync queue for offline support
-                        if (!navigator.onLine) {
-                            // Get the full front object for syncing
-                            const fullFront = await db.harvestFronts.get(frontId);
-                            await addToSyncQueue('update', 'harvestFronts', frontId, fullFront);
-                        }
+                        const fullFront = await db.harvestFronts.get(frontId);
+                        await addToSyncQueue('update', 'harvestFronts', frontId, fullFront);
                         
                         hideLoading();
                         showToast(`Frente ${newStatus === 'active' ? 'ativada' : 'desativada'} com sucesso!`, 'success');
@@ -6996,10 +6992,7 @@
                                     // Delete the front
                                     await db.harvestFronts.delete(frontId);
                                     
-                                    // Add to sync queue for offline support
-                                    if (!navigator.onLine) {
-                                        await addToSyncQueue('delete', 'harvestFronts', frontId, { id: frontId });
-                                    }
+                                    await addToSyncQueue('delete', 'harvestFronts', frontId, { id: frontId });
                                     
                                     hideLoading();
                                     showToast('Frente de colheita e rotas associadas excluídas com sucesso!', 'success');
@@ -7017,10 +7010,7 @@
                         // No routes associated, just delete the front
                         await db.harvestFronts.delete(frontId);
                         
-                        // Add to sync queue for offline support
-                        if (!navigator.onLine) {
-                            await addToSyncQueue('delete', 'harvestFronts', frontId, { id: frontId });
-                        }
+                        await addToSyncQueue('delete', 'harvestFronts', frontId, { id: frontId });
                         
                         hideLoading();
                         showToast('Frente de colheita excluída com sucesso!', 'success');
