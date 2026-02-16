@@ -713,23 +713,12 @@
                     .onSnapshot(snapshot => {
                         snapshot.docChanges().forEach(async change => {
                             const data = change.doc.data();
-                            const id = parseInt(change.doc.id); // Assuming numeric IDs from Dexie
+                            const id = parseInt(change.doc.id);
                             
                             if (change.type === "added" || change.type === "modified") {
-                                // Update local Dexie DB, but don't trigger another sync
-                                // We need a way to flag this update as "from remote" to avoid loops
-                                // For now, simple put (might cause a redundant sync entry if not handled)
                                 try {
-                                    // Check if we have a newer local version in sync queue
-                                    const pendingSync = await db.syncQueue
-                                        .where('[tableName+itemId]')
-                                        .equals([tableName, id])
-                                        .first();
-                                        
-                                    if (!pendingSync) {
-                                        await db[tableName].put(data);
-                                        console.log(`Updated local ${tableName}/${id} from Firebase`);
-                                    }
+                                    await db[tableName].put({ ...data, id });
+                                    console.log(`Updated local ${tableName}/${id} from Firebase`);
                                 } catch (e) {
                                     console.error(`Error updating local DB from Firebase:`, e);
                                 }
@@ -4471,13 +4460,10 @@
                             
                             await db.routes.update(parseInt(routeId), updates);
                             
-                            // Add to sync queue for offline support
-                            if (!navigator.onLine) {
-                                await addToSyncQueue('update', 'routes', routeId, {
-                                    ...route,
-                                    ...updates
-                                });
-                            }
+                            await addToSyncQueue('update', 'routes', routeId, {
+                                ...route,
+                                ...updates
+                            });
                             
                             hideLoading();
                             showToast('Rota marcada como concluída com sucesso!', 'success');
@@ -4534,10 +4520,7 @@
                             
                             const newRouteId = await db.routes.add(newRoute);
                             
-                            // Add to sync queue for offline support
-                            if (!navigator.onLine) {
-                                await addToSyncQueue('add', 'routes', newRouteId, newRoute);
-                            }
+                            await addToSyncQueue('add', 'routes', newRouteId, newRoute);
                             
                             hideLoading();
                             showToast('Rota duplicada com sucesso!', 'success');
@@ -7052,13 +7035,9 @@
                     try {
                         showLoading('Excluindo rota...');
                         
-                        // Delete the route
                         await db.routes.delete(routeId);
                         
-                        // Add to sync queue for offline support
-                        if (!navigator.onLine) {
-                            await addToSyncQueue('delete', 'routes', routeId, { id: routeId });
-                        }
+                        await addToSyncQueue('delete', 'routes', routeId, { id: routeId });
                         
                         hideLoading();
                         showToast('Rota excluída com sucesso!', 'success');
@@ -7118,10 +7097,7 @@
                 // Add to database
                 const id = await db.drivers.add(newDriver);
                 
-                // Add to sync queue for offline support
-                if (!navigator.onLine) {
-                    await addToSyncQueue('add', 'drivers', id, { ...newDriver, id });
-                }
+                await addToSyncQueue('add', 'drivers', id, { ...newDriver, id });
                 
                 hideLoading();
                 showToast('Motorista adicionado com sucesso!', 'success');
@@ -7175,12 +7151,8 @@
                 // Update in database
                 await db.drivers.update(driverId, updates);
                 
-                // Add to sync queue for offline support
-                if (!navigator.onLine) {
-                    // Get the full driver object for syncing
-                    const fullDriver = await db.drivers.get(driverId);
-                    await addToSyncQueue('update', 'drivers', driverId, fullDriver);
-                }
+                const fullDriver = await db.drivers.get(driverId);
+                await addToSyncQueue('update', 'drivers', driverId, fullDriver);
                 
                 hideLoading();
                 showToast('Motorista atualizado com sucesso!', 'success');
@@ -7215,15 +7187,10 @@
                             updatedAt: new Date().toISOString()
                         };
                         
-                        // Update in database
                         await db.drivers.update(driverId, updates);
                         
-                        // Add to sync queue for offline support
-                        if (!navigator.onLine) {
-                            // Get the full driver object for syncing
-                            const fullDriver = await db.drivers.get(driverId);
-                            await addToSyncQueue('update', 'drivers', driverId, fullDriver);
-                        }
+                        const fullDriver = await db.drivers.get(driverId);
+                        await addToSyncQueue('update', 'drivers', driverId, fullDriver);
                         
                         hideLoading();
                         showToast(`Motorista ${newStatus === 'active' ? 'ativado' : 'desativado'} com sucesso!`, 'success');
@@ -7248,13 +7215,9 @@
                     try {
                         showLoading('Excluindo motorista...');
                         
-                        // Delete the driver
                         await db.drivers.delete(driverId);
                         
-                        // Add to sync queue for offline support
-                        if (!navigator.onLine) {
-                            await addToSyncQueue('delete', 'drivers', driverId, { id: driverId });
-                        }
+                        await addToSyncQueue('delete', 'drivers', driverId, { id: driverId });
                         
                         hideLoading();
                         showToast('Motorista excluído com sucesso!', 'success');
