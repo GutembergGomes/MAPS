@@ -659,9 +659,10 @@
                     // Mark as processing
                     await db.syncQueue.update(item.id, { status: 'processing' });
                     
+                    // Usar coleção compartilhada para todos os usuários
                     const collectionRef = dbFirestore
-                        .collection('users')
-                        .doc(currentUser.uid)
+                        .collection('harvest_data')
+                        .doc('main')
                         .collection(item.tableName);
                     
                     if (item.action === 'create' || item.action === 'update' || item.action === 'add') {
@@ -707,8 +708,9 @@
             const tables = ['harvestFronts', 'routes', 'drivers', 'farms'];
             
             tables.forEach(tableName => {
-                dbFirestore.collection('users')
-                    .doc(currentUser.uid)
+                // Usar coleção compartilhada
+                dbFirestore.collection('harvest_data')
+                    .doc('main')
                     .collection(tableName)
                     .onSnapshot(snapshot => {
                         snapshot.docChanges().forEach(async change => {
@@ -2660,6 +2662,9 @@
                                                             <button onclick="viewFrontDetails(${front.id})" class="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">
                                                                 <i class="fas fa-info-circle mr-2"></i> Detalhes
                                                             </button>
+                                                            <button onclick="selectSuggestedRouteForFront(${front.id})" class="block w-full text-left px-4 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20">
+                                                                <i class="fas fa-map-signs mr-2"></i> Usar Rota Sugerida
+                                                            </button>
                                                             <button onclick="toggleFrontStatus(${front.id}, '${front.status === 'active' ? 'inactive' : 'active'}')" class="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">
                                                                 <i class="fas fa-${front.status === 'active' ? 'pause' : 'play'} mr-2"></i> ${front.status === 'active' ? 'Desativar' : 'Ativar'}
                                                             </button>
@@ -3105,13 +3110,15 @@
             `;
             
             // Populate fazendas cadastradas e mapa de pré-visualização
-            (async () => {
+            setTimeout(async () => {
                 try {
                     const selectEl = document.getElementById('frontFarmSelect');
                     const inputEl = document.getElementById('frontLocation');
                     const mapEl = document.getElementById('frontFarmMap');
                     
                     const farms = await db.farms.toArray();
+                    console.log('Fazendas carregadas para seleção:', farms);
+
                     if (selectEl && farms && farms.length > 0) {
                         farms.forEach(farm => {
                             const opt = document.createElement('option');
@@ -3123,8 +3130,8 @@
                         let mapInstance = null;
                         let geoLayer = null;
                         
-                        selectEl.addEventListener('change', () => {
-                            const farmId = parseInt(selectEl.value);
+                        selectEl.onchange = function() {
+                            const farmId = parseInt(this.value);
                             const selected = farms.find(f => f.id === farmId);
                             
                             if (selected) {
@@ -3146,28 +3153,35 @@
                                     }
                                     
                                     if (selected.geoJson) {
-                                        geoLayer = L.geoJSON(selected.geoJson, {
-                                            style: { color: '#10B981', weight: 2, fillOpacity: 0.2 }
-                                        }).addTo(mapInstance);
-                                        
-                                        const bounds = geoLayer.getBounds();
-                                        if (bounds.isValid()) {
-                                            mapInstance.fitBounds(bounds, { padding: [10, 10] });
+                                        try {
+                                            geoLayer = L.geoJSON(selected.geoJson, {
+                                                style: { color: '#10B981', weight: 2, fillOpacity: 0.2 }
+                                            }).addTo(mapInstance);
+                                            
+                                            const bounds = geoLayer.getBounds();
+                                            if (bounds.isValid()) {
+                                                mapInstance.fitBounds(bounds, { padding: [10, 10] });
+                                            }
+                                            setTimeout(() => mapInstance.invalidateSize(), 200);
+                                        } catch(err) {
+                                            console.error('Erro ao renderizar GeoJSON:', err);
                                         }
-                                        setTimeout(() => mapInstance.invalidateSize(), 100);
                                     }
                                 }
                             } else {
                                 if (mapEl) {
                                     mapEl.classList.add('hidden');
                                 }
+                                if (inputEl) inputEl.value = '';
                             }
-                        });
+                        };
+                    } else {
+                        console.warn('Elemento select não encontrado ou nenhuma fazenda cadastrada.');
                     }
                 } catch(e) {
                     console.error('Erro ao carregar fazendas para Localização:', e);
                 }
-            })();
+            }, 100);
         }
         
         async function renderEditHarvestFrontView(frontId) {
@@ -3921,8 +3935,68 @@
                 
                 // Initialize map for recording
                 setTimeout(() => {
-                    initRecordMap();
-                }, 100);
+                initRecordMap();
+                
+                const suggestedRouteId = appView.dataset.suggestedRouteId;
+                if (suggestedRouteId) {
+                    db.routes.get(parseInt(suggestedRouteId)).then(async route => {
+                        if (route && route.path && currentRecording.map) {
+                            
+                            // Check for recalculation from user location
+                            if (route.tags && route.tags.includes('usina-to-farm') && currentRecording.currentPositionMarker) {
+                                const userPos = currentRecording.currentPositionMarker.getLatLng();
+                                const routeStart = route.path[0];
+                                
+                                let dist = 0;
+                                if (typeof haversineDistance === 'function') {
+                                    dist = haversineDistance(userPos.lat, userPos.lng, routeStart.lat, routeStart.lng);
+                                }
+                                
+                                if (dist > 5) { // If > 5km from Usina start
+                                    showToast('Recalculando rota a partir da sua localização...', 'info');
+                                    const routeEnd = route.path[route.path.length - 1];
+                                    const url = `https://router.project-osrm.org/route/v1/driving/${userPos.lng},${userPos.lat};${routeEnd.lng},${routeEnd.lat}?overview=full&geometries=geojson`;
+                                    
+                                    try {
+                                        const response = await fetch(url);
+                                        const data = await response.json();
+                                        if (data.routes && data.routes.length > 0) {
+                                            const newRoute = data.routes[0];
+                                            const newCoordinates = newRoute.geometry.coordinates.map(c => [c[1], c[0]]);
+                                            
+                                            currentRecording.suggestedRouteLayer = L.polyline(newCoordinates, {
+                                                color: '#3b82f6',
+                                                weight: 5,
+                                                opacity: 0.8,
+                                                dashArray: '10, 10'
+                                            }).addTo(currentRecording.map);
+                                            
+                                            const bounds = currentRecording.suggestedRouteLayer.getBounds();
+                                            if (bounds.isValid()) currentRecording.map.fitBounds(bounds);
+                                            return;
+                                        }
+                                    } catch(e) { console.error('Falha ao recalcular', e); }
+                                }
+                            }
+
+                            const coordinates = route.path.map(p => [p.lat, p.lng]);
+                            
+                            currentRecording.suggestedRouteLayer = L.polyline(coordinates, {
+                                color: '#3b82f6',
+                                weight: 5,
+                                opacity: 0.8,
+                                dashArray: '10, 10'
+                            }).addTo(currentRecording.map);
+                            
+                            const bounds = currentRecording.suggestedRouteLayer.getBounds();
+                            if (bounds.isValid()) {
+                                currentRecording.map.fitBounds(bounds);
+                            }
+                            showToast(`Rota sugerida "${route.name}" carregada.`, 'success');
+                        }
+                    }).catch(err => console.error('Erro ao carregar rota sugerida:', err));
+                }
+            }, 100);
             } catch (error) {
                 console.error('Erro ao renderizar registro de rota:', error);
                 showToast('Erro ao carregar página de registro de rota', 'error');
@@ -4022,11 +4096,28 @@
         
         async function renderRouteDetailsView(frontId, routeId) {
             try {
-                const front = await db.harvestFronts.get(parseInt(frontId));
+                let front = null;
+                const fId = parseInt(frontId);
+                
+                if (fId !== 0) {
+                    front = await db.harvestFronts.get(fId);
+                }
+                
+                // Handle suggested routes or missing fronts
                 if (!front) {
-                    showToast('Frente de colheita não encontrada', 'error');
-                    showView('routes');
-                    return;
+                    if (fId === 0) {
+                        front = {
+                            id: 0,
+                            name: 'Rota Sugerida',
+                            color: '#9CA3AF',
+                            location: 'Geral',
+                            status: 'active'
+                        };
+                    } else {
+                        showToast('Frente de colheita não encontrada', 'error');
+                        showView('routes');
+                        return;
+                    }
                 }
                 
                 const route = await db.routes.get(parseInt(routeId));
@@ -7013,11 +7104,65 @@
             );
         }
         
-        function recordRoute(frontId) {
+        function recordRoute(frontId, suggestedRouteId = null) {
             // Navigate to record route view
-            showView('record-route', {
-                params: { frontId }
-            });
+            const params = { frontId };
+            if (suggestedRouteId) {
+                params.suggestedRouteId = suggestedRouteId;
+            }
+            
+            showView('record-route', { params });
+        }
+        
+        async function selectSuggestedRouteForFront(frontId) {
+            try {
+                showLoading('Buscando rotas sugeridas...');
+                const allRoutes = await db.routes.toArray();
+                const suggestedRoutes = allRoutes.filter(r => r.tags && r.tags.includes('sugerida'));
+                
+                hideLoading();
+                
+                if (suggestedRoutes.length === 0) {
+                    showToast('Nenhuma rota sugerida encontrada.', 'info');
+                    return;
+                }
+                
+                const content = document.createElement('div');
+                content.innerHTML = `
+                    <p class="mb-4 text-gray-700 dark:text-gray-300">Selecione uma rota sugerida para utilizar:</p>
+                    <div class="space-y-2 max-h-60 overflow-y-auto">
+                        ${suggestedRoutes.map(route => `
+                            <div class="p-3 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer flex items-center" data-route-id="${route.id}">
+                                <div class="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-blue-600 dark:text-blue-300 mr-3">
+                                    <i class="fas fa-route"></i>
+                                </div>
+                                <div>
+                                    <h4 class="font-medium">${route.name}</h4>
+                                    <p class="text-sm text-gray-500 dark:text-gray-400">${(route.distance || 0).toFixed(1)} km</p>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                
+                setTimeout(() => {
+                    const items = content.querySelectorAll('[data-route-id]');
+                    items.forEach(item => {
+                        item.addEventListener('click', () => {
+                            const routeId = item.dataset.routeId;
+                            hideModal();
+                            recordRoute(frontId, routeId);
+                        });
+                    });
+                }, 100);
+                
+                showModal('Rotas Sugeridas', content, [{ text: 'Cancelar', primary: false }]);
+                
+            } catch (error) {
+                console.error('Erro ao buscar rotas sugeridas:', error);
+                hideLoading();
+                showToast('Erro ao buscar rotas sugeridas.', 'error');
+            }
         }
         
         function viewRouteDetails(frontId, routeId) {
@@ -7524,36 +7669,75 @@
                             }));
                             hasRoute = true;
                         } else {
-                            // Try Polygon (Perimeter)
+                            // Try Polygon -> Calculate route from Usina Cambuí
                             const polygonFeature = currentFarmGeoJson.features.find(f => f.geometry.type === 'Polygon');
                             if (polygonFeature) {
-                                const ring = polygonFeature.geometry.coordinates[0];
-                                if (ring && ring.length > 0) {
-                                     routePath = ring.map(c => ({
-                                        lat: c[1],
-                                        lng: c[0],
-                                        timestamp: Date.now()
-                                    }));
-                                    hasRoute = true;
+                                // Coordenadas aproximadas da Usina Cambuí (Santa Helena de Goiás)
+                                const USINA_CAMBUI_LOCATION = { lat: -17.8136, lng: -50.5969 };
+                                
+                                // Get farm center
+                                const layer = L.geoJSON(polygonFeature);
+                                const center = layer.getBounds().getCenter();
+                                
+                                // Fetch route from OSRM
+                                const url = `https://router.project-osrm.org/route/v1/driving/${USINA_CAMBUI_LOCATION.lng},${USINA_CAMBUI_LOCATION.lat};${center.lng},${center.lat}?overview=full&geometries=geojson`;
+                                
+                                try {
+                                    const response = await fetch(url);
+                                    const data = await response.json();
+                                    
+                                    if (data.routes && data.routes.length > 0) {
+                                        const route = data.routes[0];
+                                        routePath = route.geometry.coordinates.map(c => ({
+                                            lat: c[1],
+                                            lng: c[0],
+                                            timestamp: Date.now()
+                                        }));
+                                        hasRoute = true;
+                                    } else {
+                                        // Fallback to perimeter
+                                        const ring = polygonFeature.geometry.coordinates[0];
+                                        if (ring && ring.length > 0) {
+                                             routePath = ring.map(c => ({
+                                                lat: c[1],
+                                                lng: c[0],
+                                                timestamp: Date.now()
+                                            }));
+                                            hasRoute = true;
+                                        }
+                                    }
+                                } catch (err) {
+                                    console.error('Erro ao calcular rota da Usina:', err);
+                                    const ring = polygonFeature.geometry.coordinates[0];
+                                    if (ring && ring.length > 0) {
+                                         routePath = ring.map(c => ({
+                                            lat: c[1],
+                                            lng: c[0],
+                                            timestamp: Date.now()
+                                        }));
+                                        hasRoute = true;
+                                    }
                                 }
                             }
                         }
 
                         if (hasRoute && routePath.length > 0) {
                              let distance = 0;
-                             // Calculate distance if haversineDistance is available
                              if (typeof haversineDistance === 'function') {
                                  for(let i=0; i<routePath.length-1; i++) {
                                      distance += haversineDistance(routePath[i].lat, routePath[i].lng, routePath[i+1].lat, routePath[i+1].lng);
                                  }
                              }
 
+                             const tags = ['sugerida', 'kml', 'auto-generated'];
+                             if (distance > 5) tags.push('usina-to-farm');
+
                              const suggestedRoute = {
                                 name: `Rota Sugerida - ${name}`,
                                 frontId: 0, 
                                 startTime: new Date().toISOString(),
                                 status: 'active', 
-                                tags: ['sugerida', 'kml', 'auto-generated'],
+                                tags: tags,
                                 path: routePath,
                                 distance: distance,
                                 createdAt: new Date().toISOString(),
@@ -7582,12 +7766,34 @@
         }
 
         function deleteFarm(id) {
-            confirmModal(
+            showConfirmModal(
                 'Excluir Fazenda',
-                'Tem certeza que deseja excluir esta fazenda? Esta ação não pode ser desfeita.',
+                'Tem certeza que deseja excluir esta fazenda e suas rotas sugeridas? Esta ação não pode ser desfeita.',
                 async () => {
                     try {
                         showLoading('Excluindo...');
+                        
+                        // Get farm details to find associated routes
+                        const farm = await db.farms.get(id);
+                        
+                        if (farm) {
+                            // Find associated suggested routes by name match
+                            const allRoutes = await db.routes.toArray();
+                            const routesToDelete = allRoutes.filter(r => 
+                                r.tags && 
+                                r.tags.includes('sugerida') && 
+                                r.name === `Rota Sugerida - ${farm.name}`
+                            );
+                            
+                            // Delete associated routes
+                            if (routesToDelete.length > 0) {
+                                for (const route of routesToDelete) {
+                                    await db.routes.delete(route.id);
+                                    await addToSyncQueue('delete', 'routes', route.id, null);
+                                }
+                                console.log(`Deleted ${routesToDelete.length} suggested routes for farm ${farm.name}`);
+                            }
+                        }
                         
                         await db.farms.delete(id);
                         await addToSyncQueue('delete', 'farms', id, null);
@@ -7601,7 +7807,10 @@
                         hideLoading();
                         showToast('Erro ao excluir fazenda.', 'error');
                     }
-                }
+                },
+                'Excluir',
+                'Cancelar',
+                true
             );
         }
 
