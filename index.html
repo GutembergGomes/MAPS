@@ -2626,8 +2626,8 @@
                                     const assignedDrivers = drivers.filter(d => d.assignedFront === front.id && d.status === 'active');
                                     
                                     return `
-                                        <div class="harvest-card bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden stagger-item" style="animation-delay: ${index * 100}ms" data-front-id="${front.id}" data-front-name="${front.name}" data-front-status="${front.status}">
-                                            <div class="h-3" style="background-color: ${front.color}"></div>
+                                        <div class="harvest-card bg-white dark:bg-gray-800 rounded-lg shadow-md stagger-item" style="animation-delay: ${index * 100}ms" data-front-id="${front.id}" data-front-name="${front.name}" data-front-status="${front.status}">
+                                            <div class="h-3 rounded-t-lg" style="background-color: ${front.color}"></div>
                                             <div class="p-5">
                                                 <div class="flex justify-between items-start">
                                                     <h3 class="font-semibold text-lg mb-1">${front.name}</h3>
@@ -2652,7 +2652,7 @@
                                                         <i class="fas fa-route mr-2"></i> Registrar Rota
                                                     </button>
                                                     <div class="dropdown relative">
-                                                        <button class="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500">
+                                                        <button class="dropdown-toggle p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500">
                                                             <i class="fas fa-ellipsis-v"></i>
                                                         </button>
                                                         <div class="dropdown-menu hidden absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg py-1 z-10">
@@ -2707,7 +2707,7 @@
                 `;
                 
                 // Set up dropdown toggles
-                const dropdownButtons = document.querySelectorAll('.dropdown button');
+                const dropdownButtons = document.querySelectorAll('.dropdown-toggle');
                 dropdownButtons.forEach(button => {
                     button.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -2852,6 +2852,51 @@
                 frontsList.classList.remove('hidden');
                 noResultsMessage.classList.add('hidden');
             }
+        }
+        
+        function editHarvestFront(id) {
+            renderEditHarvestFrontView(id);
+        }
+        
+        function deleteHarvestFront(id) {
+            showConfirmModal(
+                'Excluir Frente de Colheita',
+                'Tem certeza que deseja excluir esta frente de colheita? Todas as rotas associadas a ela também serão excluídas.',
+                async () => {
+                    try {
+                        showLoading('Excluindo...');
+                        
+                        // Get front to delete associated routes
+                        const front = await db.harvestFronts.get(id);
+                        if (front) {
+                            // Find routes associated with this front
+                            const routes = await db.routes.where('frontId').equals(id).toArray();
+                            
+                            // Delete routes
+                            for (const route of routes) {
+                                await db.routes.delete(route.id);
+                                await addToSyncQueue('delete', 'routes', route.id, null);
+                            }
+                        }
+                        
+                        // Delete front
+                        await db.harvestFronts.delete(id);
+                        await addToSyncQueue('delete', 'harvestFronts', id, null);
+                        
+                        hideLoading();
+                        showToast('Frente de colheita excluída com sucesso.', 'success');
+                        renderHarvestFrontsView(); // Refresh list
+                        
+                    } catch (error) {
+                        console.error('Erro ao excluir frente de colheita:', error);
+                        hideLoading();
+                        showToast('Erro ao excluir frente de colheita.', 'error');
+                    }
+                },
+                'Excluir',
+                'Cancelar',
+                true
+            );
         }
         
         function resetFilters() {
@@ -3429,7 +3474,7 @@
                                                                 ${front ? `
                                                                     <div class="w-2 h-2 rounded-full mr-2" style="background-color: ${front.color}"></div>
                                                                     ${front.name}
-                                                                ` : 'Frente não encontrada'}
+                                                                ` : (route.frontId === 0 ? '<span class="text-gray-500 italic">Rota Sugerida</span>' : '<span class="text-red-500">Frente não encontrada</span>')}
                                                             </div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
@@ -6895,6 +6940,25 @@
                 
                 // Add to database
                 const id = await db.harvestFronts.add(newFront);
+                
+                // === Vincular Rotas Sugeridas Automaticamente ===
+                try {
+                    const expectedRouteName = `Rota Sugerida - ${location}`;
+                    const suggestedRoutes = await db.routes
+                        .filter(r => (r.name === expectedRouteName || (r.tags && r.tags.includes('sugerida') && r.name.includes(location))) && (!r.frontId || r.frontId === 0))
+                        .toArray();
+                    
+                    if (suggestedRoutes.length > 0) {
+                        for (const route of suggestedRoutes) {
+                            await db.routes.update(route.id, { frontId: id });
+                            await addToSyncQueue('update', 'routes', route.id, { frontId: id });
+                        }
+                        showToast(`${suggestedRoutes.length} rota(s) sugerida(s) vinculada(s).`, 'info');
+                    }
+                } catch (e) {
+                    console.error('Erro ao vincular rotas sugeridas:', e);
+                }
+                
                 await addToSyncQueue('add', 'harvestFronts', id, { ...newFront, id });
                 
                 hideLoading();
@@ -7672,8 +7736,8 @@
                             // Try Polygon -> Calculate route from Usina Cambuí
                             const polygonFeature = currentFarmGeoJson.features.find(f => f.geometry.type === 'Polygon');
                             if (polygonFeature) {
-                                // Coordenadas aproximadas da Usina Cambuí (Santa Helena de Goiás)
-                                const USINA_CAMBUI_LOCATION = { lat: -17.8136, lng: -50.5969 };
+                                // Coordenadas da Usina Cambuí (Fornecidas pelo usuário)
+                                const USINA_CAMBUI_LOCATION = { lat: -17.924714302556936, lng: -50.63708775318097 };
                                 
                                 // Get farm center
                                 const layer = L.geoJSON(polygonFeature);
