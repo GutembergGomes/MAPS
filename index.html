@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AgroRota - Gestão de Transporte Agrícola</title>
     <meta name="description" content="Sistema de gestão para transporte agrícola, frentes de colheita e motoristas">
-    <meta name="theme-color" content="#5D5CDE">
+    <meta name="theme-color" content="#1B4332">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icons/icon-192x192.png">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -16,11 +16,14 @@
     <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-    <!-- Firebase SDKs -->
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-analytics-compat.js"></script>
+    <!-- Supabase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        // Supabase Configuration
+        const SUPABASE_URL = 'https://luekwjjoqdlicnwactal.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_KAsRaNSeEj6V8hN567pv2w_l-Qx_E9_';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    </script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -28,17 +31,22 @@
                 extend: {
                     colors: {
                         primary: {
-                            50: '#f4f4fe',
-                            100: '#e9e8fd',
-                            200: '#d3d1fb',
-                            300: '#b0adf7',
-                            400: '#8987f0',
-                            500: '#5D5CDE',
-                            600: '#4e4dcb',
-                            700: '#4240ac',
-                            800: '#373689',
-                            900: '#312f6f',
-                            950: '#1e1c45',
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            200: '#bbf7d0',
+                            300: '#86efac',
+                            400: '#4ade80',
+                            500: '#1B4332', // Deep Agro Green
+                            600: '#081C15', // Darker Green
+                            700: '#1B4332',
+                            800: '#2D6A4F',
+                            900: '#40916C',
+                            950: '#081C15',
+                        },
+                        accent: {
+                            light: '#95D5B2',
+                            medium: '#52B788',
+                            dark: '#1B4332',
                         },
                         harvest: {
                             green: '#2ecc71',
@@ -91,12 +99,62 @@
         
         /* Loading animations */
         .loader {
-            border-top-color: #5D5CDE;
+            border-top-color: #1B4332;
             animation: spinner 1s linear infinite;
         }
         @keyframes spinner {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
+        }
+
+        /* Circular Gauge Styles */
+        .gauge-container {
+            position: relative;
+            width: 100px;
+            height: 100px;
+        }
+        .gauge-svg {
+            transform: rotate(-90deg);
+        }
+        .gauge-bg {
+            fill: none;
+            stroke: #e2e8f0;
+            stroke-width: 8;
+        }
+        .gauge-fill {
+            fill: none;
+            stroke: #4ade80;
+            stroke-width: 8;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s ease-in-out;
+        }
+        .gauge-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-weight: bold;
+            font-size: 1.25rem;
+        }
+
+        /* Banner Styles */
+        .agro-banner {
+            background: linear-gradient(135deg, #1B4332 0%, #081C15 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        .agro-banner::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('https://www.transparenttextures.com/patterns/carbon-fibre.png');
+            opacity: 0.1;
+        }
+        .neon-text {
+            text-shadow: 0 0 10px rgba(74, 222, 128, 0.5);
         }
         
         /* Transition animations */
@@ -435,35 +493,41 @@
     <!-- App Container -->
     <div class="flex flex-col h-screen">
         <!-- Header -->
-        <header class="bg-white dark:bg-gray-800 shadow-sm">
+        <header class="bg-primary-600 dark:bg-primary-950 text-white shadow-lg">
             <div class="container mx-auto px-4 py-3">
                 <div class="flex items-center justify-between">
-                    <div class="flex items-center space-x-2">
-                        <div class="flex items-center justify-center w-10 h-10 bg-primary-500 rounded-lg shadow-inner">
-                            <span class="text-white font-bold text-xl tracking-tighter">GG</span>
+                    <div class="flex items-center space-x-3">
+                        <div class="flex items-center justify-center w-12 h-12 bg-white rounded-xl shadow-inner transform transition hover:scale-105">
+                            <i class="fas fa-tractor text-primary-600 text-2xl"></i>
                         </div>
                         <div class="flex flex-col">
-                            <h1 class="text-xl font-black text-primary-500 leading-none">AgroRota</h1>
-                            <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em] leading-tight">Ggomes Log</span>
+                            <h1 class="text-2xl font-black tracking-tight leading-none text-white">AgroRota</h1>
+                            <span class="text-[10px] font-bold text-green-200 uppercase tracking-[0.2em] leading-tight">Gestão Logística para Colheita</span>
                         </div>
                     </div>
                     <div class="flex items-center space-x-4">
-                        <button id="darkModeToggle" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500" aria-label="Alternar modo escuro">
-                            <i id="darkModeIcon" class="fas fa-moon"></i>
+                        <button id="darkModeToggle" class="p-2 rounded-full hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white" aria-label="Alternar modo escuro">
+                            <i id="darkModeIcon" class="fas fa-moon text-white"></i>
                         </button>
                         <div class="relative" id="userMenuContainer">
-                            <button id="userMenuButton" class="flex items-center space-x-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded-full" aria-expanded="false" aria-haspopup="true" aria-label="Menu do usuário">
-                                <div id="userAvatarInitial" class="w-8 h-8 rounded-full bg-primary-500 flex items-center justify-center text-white font-semibold">
+                            <button id="userMenuButton" class="flex items-center space-x-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-white rounded-full p-1 hover:bg-white/10 transition" aria-expanded="false" aria-haspopup="true" aria-label="Menu do usuário">
+                                <div id="userAvatarInitial" class="w-8 h-8 rounded-full bg-accent-medium flex items-center justify-center text-white font-semibold border-2 border-white/20">
                                     U
                                 </div>
-                                <span id="userDisplayName" class="hidden sm:inline-block">Usuário</span>
-                                <i class="fas fa-chevron-down text-xs hidden sm:inline-block"></i>
+                                <span id="userDisplayName" class="hidden sm:inline-block font-medium text-white">Usuário</span>
+                                <i class="fas fa-chevron-down text-xs hidden sm:inline-block text-white/70"></i>
                             </button>
-                            <div id="userMenu" class="dropdown-menu absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg py-1 z-10 ring-1 ring-black ring-opacity-5">
-                                <a href="#" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700" role="menuitem">Perfil</a>
-                                <a href="#" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700" role="menuitem">Configurações</a>
-                                <div class="border-t border-gray-200 dark:border-gray-700 my-1"></div>
-                                <a href="#" onclick="logout()" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700" role="menuitem">Sair</a>
+                            <div id="userMenu" class="dropdown-menu absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-xl py-1 z-10 ring-1 ring-black ring-opacity-5">
+                                <a href="#" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700" role="menuitem">
+                                    <i class="fas fa-user mr-2 text-gray-400"></i>Perfil
+                                </a>
+                                <a href="#" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700" role="menuitem">
+                                    <i class="fas fa-cog mr-2 text-gray-400"></i>Configurações
+                                </a>
+                                <div class="border-t border-gray-100 dark:border-gray-700 my-1"></div>
+                                <a href="#" onclick="logout()" class="block px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20" role="menuitem">
+                                    <i class="fas fa-sign-out-alt mr-2"></i>Sair
+                                </a>
                             </div>
                         </div>
                     </div>
@@ -590,9 +654,9 @@
         // Database setup with improved schema and indexing
         // Mudando nome do banco para garantir que inicie zerado (nova versão sem dados antigos)
         const db = new Dexie('AgroRotaDB_Prod');
-        db.version(2).stores({
+        db.version(3).stores({
             harvestFronts: '++id, name, status, createdAt, updatedAt',
-            routes: '++id, frontId, startTime, status, createdAt, updatedAt, *tags',
+            routes: '++id, frontId, farmId, startTime, status, createdAt, updatedAt, *tags',
             drivers: '++id, name, status, assignedFront, createdAt, updatedAt',
             farms: '++id, name, status, createdAt, updatedAt',
             settings: 'key',
@@ -636,7 +700,93 @@
             return 'simulated-auth-token';
         }
         
-        // Sync queue processing - Improved to sync with Firebase
+        // Helper to convert camelCase to snake_case
+        function camelToSnake(obj) {
+            if (typeof obj !== 'object' || obj === null) return obj;
+            if (Array.isArray(obj)) return obj.map(camelToSnake);
+            
+            const newObj = {};
+            for (const key in obj) {
+                // Ignore keys that are already snake_case (like in GeoJSON)
+                const newKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+                
+                // If the key is 'geo_json' or 'path', don't recurse deeply to avoid corrupting nested structures
+                if (key === 'geoJson' || key === 'path' || key === 'geo_json') {
+                    newObj[newKey] = obj[key];
+                } else {
+                    newObj[newKey] = typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key]) ? camelToSnake(obj[key]) : obj[key];
+                }
+            }
+            return newObj;
+        }
+
+        // Helper to convert snake_case to camelCase
+        function snakeToCamel(obj) {
+            if (typeof obj !== 'object' || obj === null) return obj;
+            if (Array.isArray(obj)) return obj.map(snakeToCamel);
+            
+            const newObj = {};
+            for (const key in obj) {
+                const newKey = key.replace(/(_\w)/g, match => match[1].toUpperCase());
+                
+                // If the key is 'geo_json' or 'path', don't recurse deeply to avoid corrupting nested structures
+                if (key === 'geo_json' || key === 'path' || key === 'geoJson') {
+                    newObj[newKey] = obj[key];
+                } else {
+                    newObj[newKey] = typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key]) ? snakeToCamel(obj[key]) : obj[key];
+                }
+            }
+            return newObj;
+        }
+
+        const TABLE_MAP = {
+            'harvestFronts': 'harvest_fronts',
+            'routes': 'routes',
+            'drivers': 'drivers',
+            'farms': 'farms',
+            'users': 'users'
+        };
+
+        // Sync all data from Supabase to local DB
+        async function syncAllFromSupabase() {
+            if (!navigator.onLine) return;
+            
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (!session) return;
+            
+            const dexieTables = ['harvestFronts', 'routes', 'drivers', 'farms'];
+            
+            showLoading('Sincronizando dados...');
+            appLog('Iniciando sincronização completa do Supabase...');
+            
+            try {
+                for (const dexieTableName of dexieTables) {
+                    const supabaseTableName = TABLE_MAP[dexieTableName];
+                    const { data, error } = await supabaseClient
+                        .from(supabaseTableName)
+                        .select('*');
+                    
+                    if (error) throw error;
+                    
+                    if (data && data.length > 0) {
+                        const camelData = data.map(item => snakeToCamel(item));
+                        // Clear local table and refill with cloud data
+                        await db[dexieTableName].clear();
+                        await db[dexieTableName].bulkPut(camelData);
+                        console.log(`Synced ${data.length} items for ${dexieTableName}`);
+                    }
+                }
+                appLog('Sincronização concluída com sucesso!');
+            } catch (error) {
+                console.error('Error in syncAllFromSupabase:', error);
+                appLog(`Erro na sincronização: ${error.message}`, true);
+                showToast('Erro ao sincronizar dados com o servidor.', 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // Sync queue processing - Improved to sync with Supabase
         async function processSyncQueue() {
             if (!navigator.onLine) return;
             
@@ -645,14 +795,10 @@
             
             console.log(`Processing ${queueItems.length} items in sync queue...`);
             
-            // Check if Firebase is available
-            if (!firebase.apps.length) return;
+            const { data: { session } } = await supabaseClient.auth.getSession();
             
-            const dbFirestore = firebase.firestore();
-            const currentUser = firebase.auth().currentUser;
-            
-            if (!currentUser) {
-                console.log('No user logged in, skipping sync');
+            if (!session) {
+                console.log('No session, skipping sync');
                 return;
             }
             
@@ -664,23 +810,22 @@
                     // Mark as processing
                     await db.syncQueue.update(item.id, { status: 'processing' });
                     
-                    // Usar coleção compartilhada para todos os usuários
-                    const collectionRef = dbFirestore
-                        .collection('harvest_data')
-                        .doc('main')
-                        .collection(item.tableName);
+                    const supabaseTableName = TABLE_MAP[item.tableName] || item.tableName;
+                    const syncData = camelToSnake(item.data);
                     
                     if (item.action === 'create' || item.action === 'update' || item.action === 'add') {
-                        // For create/update, we write to Firestore
-                        // Convert ID to string for Firestore document ID
-                        const docId = item.itemId.toString();
-                        await collectionRef.doc(docId).set({ ...item.data }, { merge: true });
-                        console.log(`Synced ${item.action} for ${item.tableName}/${item.itemId} to Firebase`);
+                        const { error } = await supabaseClient
+                            .from(supabaseTableName)
+                            .upsert({ ...syncData, id: item.itemId });
+                        if (error) throw error;
+                        console.log(`Synced ${item.action} for ${item.tableName}/${item.itemId} to Supabase (${supabaseTableName})`);
                     } else if (item.action === 'delete') {
-                        // For delete, remove from Firestore
-                        const docId = item.itemId.toString();
-                        await collectionRef.doc(docId).delete();
-                        console.log(`Synced delete for ${item.tableName}/${item.itemId} from Firebase`);
+                        const { error } = await supabaseClient
+                            .from(supabaseTableName)
+                            .delete()
+                            .eq('id', item.itemId);
+                        if (error) throw error;
+                        console.log(`Synced delete for ${item.tableName}/${item.itemId} from Supabase (${supabaseTableName})`);
                     }
                     
                     // If successful, remove from queue
@@ -702,43 +847,36 @@
             }
         }
         
-        // Setup Firestore listener for real-time updates
-        function setupFirestoreListeners() {
-            if (!firebase.apps.length) return;
+        // Setup Supabase Realtime listeners
+        function setupSupabaseListeners() {
+            const dexieTables = ['harvestFronts', 'routes', 'drivers', 'farms'];
             
-            const currentUser = firebase.auth().currentUser;
-            if (!currentUser) return;
-            
-            const dbFirestore = firebase.firestore();
-            const tables = ['harvestFronts', 'routes', 'drivers', 'farms'];
-            
-            tables.forEach(tableName => {
-                // Usar coleção compartilhada
-                dbFirestore.collection('harvest_data')
-                    .doc('main')
-                    .collection(tableName)
-                    .onSnapshot(snapshot => {
-                        snapshot.docChanges().forEach(async change => {
-                            const data = change.doc.data();
-                            const id = parseInt(change.doc.id);
-                            
-                            if (change.type === "added" || change.type === "modified") {
-                                try {
-                                    await db[tableName].put({ ...data, id });
-                                    console.log(`Updated local ${tableName}/${id} from Firebase`);
-                                } catch (e) {
-                                    console.error(`Error updating local DB from Firebase:`, e);
-                                }
-                            } else if (change.type === "removed") {
-                                try {
-                                    await db[tableName].delete(id);
-                                    console.log(`Deleted local ${tableName}/${id} from Firebase`);
-                                } catch (e) {
-                                    console.error(`Error deleting from local DB:`, e);
-                                }
+            dexieTables.forEach(dexieTableName => {
+                const supabaseTableName = TABLE_MAP[dexieTableName];
+                
+                supabaseClient
+                    .channel(`public:${supabaseTableName}`)
+                    .on('postgres_changes', { event: '*', schema: 'public', table: supabaseTableName }, async payload => {
+                        const data = snakeToCamel(payload.new);
+                        const id = payload.new ? payload.new.id : payload.old.id;
+                        
+                        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+                            try {
+                                await db[dexieTableName].put(data);
+                                console.log(`Updated local ${dexieTableName}/${id} from Supabase`);
+                            } catch (e) {
+                                console.error(`Error updating local DB from Supabase:`, e);
                             }
-                        });
-                    });
+                        } else if (payload.eventType === 'DELETE') {
+                            try {
+                                await db[dexieTableName].delete(id);
+                                console.log(`Deleted local ${dexieTableName}/${id} from Supabase`);
+                            } catch (e) {
+                                console.error(`Error deleting from local DB:`, e);
+                            }
+                        }
+                    })
+                    .subscribe();
             });
         }
 
@@ -755,7 +893,9 @@
                     retries: 0
                 });
                 console.log(`Added ${action} operation to sync queue for ${tableName} id ${itemId}`);
-                if (navigator.onLine && firebase.apps.length && firebase.auth().currentUser) {
+                
+                const { data: { session } } = await supabaseClient.auth.getSession();
+                if (navigator.onLine && session) {
                     await processSyncQueue();
                 }
             } catch (error) {
@@ -998,7 +1138,9 @@
             navigationStartTime: null,
             accuracyThreshold: 20, // meters
             locationErrorTimeout: null,
-            locationErrors: 0
+            locationErrors: 0,
+            autoFollow: true,
+            isFirstUpdate: true
         };
         
         // Initialize database with sample data if empty
@@ -1006,9 +1148,10 @@
             try {
                 showLoading('Inicializando banco de dados...');
                 
-                // Sistema zerado conforme solicitado
-                // Código de dados fictícios removido completamente
-                
+                // Abre o banco de dados
+                await db.open();
+                console.log('Banco de dados local aberto.');
+
                 hideLoading();
                 return true;
             } catch (error) {
@@ -1019,75 +1162,60 @@
             }
         }
 
-        // Firebase Configuration and Initialization
+        // Supabase Configuration and Initialization
         let isRegistering = false;
         
-        function initializeFirebase() {
-            const firebaseConfig = {
-                apiKey: "AIzaSyAYEGceGZo0HEKl23pc92Zds9VGMcpZofA",
-                authDomain: "maps-313a2.firebaseapp.com",
-                projectId: "maps-313a2",
-                storageBucket: "maps-313a2.firebasestorage.app",
-                messagingSenderId: "1090999289542",
-                appId: "1:1090999289542:web:61b9c04e5de3bc769739c7",
-                measurementId: "G-946JBPMLT6"
-            };
-            
+        async function initializeSupabase() {
             try {
-                if (!firebase.apps.length) {
-                    const app = firebase.initializeApp(firebaseConfig);
-                    // Initialize Analytics if supported
-                    if (firebase.analytics) {
-                        firebase.analytics();
-                    }
-                    console.log('Firebase initialized');
-                }
-                
-                firebase.auth().onAuthStateChanged(async (user) => {
+                // Subscribe to auth changes
+                supabaseClient.auth.onAuthStateChange(async (event, session) => {
+                    const user = session?.user;
                     const header = document.querySelector('header');
                     const nav = document.querySelector('nav');
                     
                     if (user) {
                         try {
-                            const dbFirestore = firebase.firestore();
-                            const userRef = dbFirestore.collection('users').doc(user.uid);
-                            const snapshot = await userRef.get();
+                            // Get user profile from 'users' table
+                            const { data: profile, error } = await supabaseClient
+                                .from('users')
+                                .select('*')
+                                .eq('id', user.id)
+                                .single();
                             
                             let role = null;
                             let displayName = user.email || 'Usuário';
                             let needsRoleSelection = false;
                             
-                            // FORCE ADMIN FOR SPECIFIC EMAIL (Case insensitive & trimmed)
+                            // FORCE ADMIN FOR SPECIFIC EMAIL
                             const emailCheck = (user.email || '').toLowerCase().trim();
                             if (emailCheck === 'gutemberggg10@gmail.com') {
                                 console.log('SUPER ADMIN DETECTED:', emailCheck);
                                 role = 'admin';
-                                // Force update firestore
-                                userRef.set({ role: 'admin' }, { merge: true }).catch(e => console.error('Error setting admin role:', e));
+                                // Sync admin role to DB
+                                await supabaseClient.from('users').upsert({ id: user.id, role: 'admin', email: emailCheck });
                             }
                             
-                            if (snapshot.exists) {
-                                const data = snapshot.data() || {};
-                                const hasRole = !!data.role;
-                                const hasProfile =
-                                    !!(data.name && data.matricula && data.usina);
+                            if (profile) {
+                                const hasRole = !!profile.role;
+                                const hasProfile = !!(profile.name && profile.matricula && profile.usina);
                                 
-                                if (hasRole && !role) { // Only set from data if not already set (by admin override)
-                                    role = data.role;
+                                if (hasRole && !role) {
+                                    role = profile.role;
                                 }
                                 
-                                if ((!hasRole && !role) || !hasProfile || data.profileCompleted === false) {
+                                if ((!hasRole && !role) || !hasProfile || profile.profile_completed === false) {
                                     needsRoleSelection = true;
                                 }
                                 
                                 if (role === 'admin') needsRoleSelection = false;
-                                
-                                if (data.name) displayName = data.name;
+                                if (profile.name) displayName = profile.name;
                             } else {
-                                await userRef.set({
-                                    email: user.email || null,
-                                    createdAt: new Date().toISOString()
-                                }, { merge: true });
+                                // Create initial profile
+                                await supabaseClient.from('users').insert({
+                                    id: user.id,
+                                    email: user.email,
+                                    created_at: new Date().toISOString()
+                                });
                                 needsRoleSelection = true;
                             }
                             
@@ -1112,7 +1240,11 @@
                                 } else {
                                     showView('dashboard', { replace: true });
                                 }
-                                setupFirestoreListeners();
+                                
+                                // Sincronização inicial completa do servidor para o local
+                                await syncAllFromSupabase();
+                                
+                                setupSupabaseListeners();
                                 processSyncQueue();
                                 if (window.syncInterval) clearInterval(window.syncInterval);
                                 window.syncInterval = setInterval(processSyncQueue, 30000);
@@ -1133,13 +1265,10 @@
                     }
                 });
                 
+                appLog('Supabase Auth Initialized');
             } catch (error) {
-                console.error('Firebase initialization error:', error);
-                if (error && (error.code === 'app/no-app' || (error.message || '').includes('apiKey'))) {
-                    showToast('Configuração do Firebase pendente. Edite o arquivo index.html.', 'warning');
-                } else {
-                    showToast('Erro ao conectar com o servidor. Verifique sua conexão.', 'error');
-                }
+                console.error('Supabase initialization error:', error);
+                showToast('Erro ao conectar com o servidor Supabase.', 'error');
                 renderLoginView();
             }
         }
@@ -1156,80 +1285,62 @@
             
             try {
                 if (isRegistering) {
-                    await firebase.auth().createUserWithEmailAndPassword(email, password);
-                    showToast('Conta criada com sucesso!', 'success');
+                    const { data, error } = await supabaseClient.auth.signUp({
+                        email,
+                        password,
+                    });
+                    if (error) throw error;
+                    showToast('Conta criada! Verifique seu e-mail.', 'success');
                 } else {
-                    await firebase.auth().signInWithEmailAndPassword(email, password);
+                    const { data, error } = await supabaseClient.auth.signInWithPassword({
+                        email,
+                        password,
+                    });
+                    if (error) throw error;
                     showToast('Login realizado com sucesso!', 'success');
                 }
             } catch (error) {
                 console.error('Auth error:', error);
                 errorDiv.classList.remove('hidden');
-                
-                let msg = 'Erro ao autenticar.';
-                if (error.code === 'auth/wrong-password') msg = 'Senha incorreta.';
-                if (error.code === 'auth/user-not-found') msg = 'Usuário não encontrado.';
-                if (error.code === 'auth/email-already-in-use') msg = 'Email já está em uso.';
-                if (error.code === 'auth/weak-password') msg = 'A senha deve ter pelo menos 6 caracteres.';
-                
+                let msg = error.message || 'Erro ao autenticar.';
+                if (msg.includes('Unexpected token') || msg.includes('DOCTYPE')) {
+                    msg = 'Erro de conexão com o servidor. Por favor, verifique sua internet ou tente novamente em instantes.';
+                }
                 errorMessage.textContent = msg;
             } finally {
                 hideLoading();
             }
         }
         
-        async function handleGoogleLogin() {
+        async function handleGoogleLogin(forcePopup = false) {
             try {
-                showLoading('Conectando com Google...');
-                const provider = new firebase.auth.GoogleAuthProvider();
-                provider.setCustomParameters({ prompt: 'select_account' });
+                showLoading('Conectando com Google (Supabase)...');
+                appLog(`Login Google via Supabase...`);
                 
-                const ua = (navigator.userAgent || '').toLowerCase();
-                const isApp = ua.includes('hmapp/android');
+                const { data, error } = await supabaseClient.auth.signInWithOAuth({
+                    provider: 'google',
+                    options: {
+                        redirectTo: window.location.origin
+                    }
+                });
                 
-                if (isApp) {
-                    await firebase.auth().signInWithRedirect(provider);
-                } else {
-                    await firebase.auth().signInWithPopup(provider);
-                }
-                showToast('Login com Google realizado com sucesso!', 'success');
-                // Navigation handled by onAuthStateChanged
+                if (error) throw error;
+                
             } catch (error) {
                 console.error('Google Auth error:', error);
-                let msg = 'Erro ao fazer login com Google.';
-                if (error.code === 'auth/popup-closed-by-user') {
-                    msg = 'Login cancelado pelo usuário.';
-                } else if (error.code === 'auth/operation-not-allowed') {
-                    msg = 'Login com Google não está habilitado no Firebase. Ative o provedor Google em Authentication > Sign-in method.';
-                } else if (error.code === 'auth/unauthorized-domain') {
-                    msg = 'Domínio não autorizado. Adicione gutemberggomes.github.io, localhost:8081 e 127.0.0.1 em Authentication > Settings > Authorized domains no Firebase.';
-                } else if (error.code === 'auth/cancelled-popup-request') {
-                    msg = 'Outra tentativa de login está em andamento. Tente novamente.';
-                } else if (error.code === 'auth/popup-blocked') {
-                    msg = 'Popup bloqueado pelo navegador. Libere popups para este site e tente novamente.';
-                }
-                showToast(msg, 'error');
+                appLog(`ERRO: ${error.message}`, true);
+                showToast(error.message, 'error');
             } finally {
                 hideLoading();
             }
         }
         
-        async function processGoogleRedirectResult() {
-            try {
-                const result = await firebase.auth().getRedirectResult();
-                if (result && result.user) {
-                    showToast('Login com Google realizado com sucesso!', 'success');
-                }
-            } catch (error) {
-                console.error('Redirect auth error:', error);
-                let msg = 'Erro ao finalizar login com Google via redirecionamento.';
-                if (error.code === 'auth/unauthorized-domain') {
-                    msg = 'Domínio não autorizado. Adicione gutemberggomes.github.io em Authorized domains no Firebase.';
-                } else if (error.code === 'auth/user-cancelled') {
-                    msg = 'Login cancelado. Tente novamente.';
-                }
-                showToast(msg, 'error');
-            }
+        function logout() {
+            supabaseClient.auth.signOut().then(() => {
+                showToast('Desconectado.', 'info');
+            }).catch((error) => {
+                console.error('Logout error:', error);
+            });
         }
         
         function toggleRegisterMode() {
@@ -1245,20 +1356,11 @@
                 btnText.textContent = 'Cadastrar';
                 toggleLink.textContent = 'Já tem uma conta? Entrar';
             } else {
-                title.textContent = 'HarvestManager';
+                title.textContent = 'AgroRota';
                 subtitle.textContent = 'Faça login para acessar o sistema';
                 btnText.textContent = 'Entrar';
                 toggleLink.textContent = 'Criar nova conta';
             }
-        }
-        
-        function logout() {
-            firebase.auth().signOut().then(() => {
-                showToast('Desconectado.', 'info');
-                // renderLoginView() is called by onAuthStateChanged
-            }).catch((error) => {
-                console.error('Logout error:', error);
-            });
         }
         
         // Generate a sample path for demo purposes with improved variation
@@ -1301,8 +1403,22 @@
         
         // Initialize the app
         document.addEventListener('DOMContentLoaded', function() {
-            initializeFirebase();
-            processGoogleRedirectResult();
+            // Helper function for debug logging
+            window.appLog = function(msg, isError = false) {
+                const console = document.getElementById('app-debug-console');
+                const content = document.getElementById('debug-log-content');
+                if (console && content) {
+                    console.classList.remove('hidden');
+                    const entry = document.createElement('div');
+                    entry.className = isError ? 'text-red-400 mb-1' : 'text-green-400 mb-1';
+                    entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+                    content.appendChild(entry);
+                    console.scrollTop = console.scrollHeight;
+                }
+            };
+            
+            appLog('App inicializando...');
+            initializeSupabase();
             
             // Check and set initial online status
             if (!navigator.onLine) {
@@ -1566,7 +1682,7 @@
         
         async function chooseUserRole(role) {
             try {
-                const user = firebase.auth().currentUser;
+                const { data: { user } } = await supabaseClient.auth.getUser();
                 if (!user) {
                     showToast('Usuário não autenticado.', 'error');
                     return;
@@ -1587,15 +1703,18 @@
                     return;
                 }
                 
-                const dbFirestore = firebase.firestore();
-                await dbFirestore.collection('users').doc(user.uid).set({
+                const { error } = await supabaseClient.from('users').upsert({
+                    id: user.id,
                     role: role,
                     name: name,
                     matricula: matricula,
                     cnh: cnh || null,
                     usina: usina,
-                    profileCompleted: true
-                }, { merge: true });
+                    profile_completed: true,
+                    email: user.email
+                });
+                
+                if (error) throw error;
                 
                 AppState.currentUser = AppState.currentUser || {};
                 AppState.currentUser.role = role;
@@ -1617,7 +1736,7 @@
                     showView('dashboard', { replace: true });
                 }
                 
-                setupFirestoreListeners();
+                setupSupabaseListeners();
                 processSyncQueue();
                 if (window.syncInterval) clearInterval(window.syncInterval);
                 window.syncInterval = setInterval(processSyncQueue, 30000);
@@ -1763,7 +1882,7 @@
                     // Render the requested view
                     switch(viewName) {
                         case 'welcome':
-                            renderWelcomeView();
+                            await renderWelcomeView();
                             break;
                         case 'dashboard':
                             await renderDashboardView();
@@ -1772,7 +1891,7 @@
                             await renderHarvestFrontsView();
                             break;
                         case 'add-harvest-front':
-                            renderAddHarvestFrontView();
+                            await renderAddHarvestFrontView();
                             break;
                         case 'edit-harvest-front':
                             await renderEditHarvestFrontView(appView.dataset.frontId);
@@ -1935,20 +2054,35 @@
                                     <img class="h-5 w-5 mr-2" src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google">
                                     <span>Google</span>
                                 </button>
+                                <div id="google-fallback-container" class="mt-3 text-center">
+                                    <button onclick="handleGoogleLogin(true)" type="button" class="text-xs text-primary-500 hover:text-primary-600 underline">
+                                        Não consegue logar? Tente o método alternativo
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         
                         <div id="login-error" class="hidden mt-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
                             <span class="block sm:inline" id="login-error-message"></span>
                         </div>
+                        
+                        <!-- DEBUG CONSOLE FOR APP -->
+                        <div id="app-debug-console" class="mt-6 p-2 bg-black text-green-500 font-mono text-xs rounded-lg hidden overflow-y-auto max-h-32 border border-gray-600">
+                            <div class="flex justify-between items-center border-b border-gray-700 mb-1 pb-1">
+                                <span>DEBUG CONSOLE</span>
+                                <button onclick="this.parentElement.parentElement.classList.add('hidden')" class="text-red-500">X</button>
+                            </div>
+                            <div id="debug-log-content"></div>
+                        </div>
                     </div>
                 </div>
             `;
         }
 
-        function renderWelcomeView() {
+        async function renderWelcomeView() {
             // Se não estiver logado, redireciona para login
-            if (!firebase.auth().currentUser) {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (!session) {
                 renderLoginView();
                 return;
             }
@@ -2063,95 +2197,113 @@
                 
                 appView.innerHTML = `
                     <div class="fade-in">
+                        <!-- AgroRota Premium Banner -->
+                        <div class="agro-banner rounded-2xl shadow-2xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between text-white">
+                            <div class="flex items-center mb-6 md:mb-0">
+                                <div class="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center mr-6 border border-white/20">
+                                    <i class="fas fa-tractor text-4xl text-green-400 neon-text"></i>
+                                </div>
+                                <div>
+                                    <h2 class="text-3xl font-black neon-text">AgroRota®</h2>
+                                    <p class="text-green-300 font-medium tracking-wide">- Gestão Logística para Colheita</p>
+                                </div>
+                            </div>
+                            
+                            <div class="flex space-x-8">
+                                <div class="flex flex-col items-center">
+                                    <div class="gauge-container mb-2">
+                                        <svg class="gauge-svg" width="100" height="100">
+                                            <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                                            <circle class="gauge-fill" cx="50" cy="50" r="40" style="stroke-dasharray: 251; stroke-dashoffset: ${251 - (251 * 0.98)}" />
+                                        </svg>
+                                        <div class="gauge-text text-white">98%</div>
+                                    </div>
+                                    <span class="text-xs font-bold uppercase tracking-tighter text-green-400">Eficiência</span>
+                                </div>
+                                <div class="flex flex-col items-center">
+                                    <div class="gauge-container mb-2">
+                                        <svg class="gauge-svg" width="100" height="100">
+                                            <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                                            <circle class="gauge-fill" cx="50" cy="50" r="40" style="stroke: #f1c40f; stroke-dasharray: 251; stroke-dashoffset: ${251 - (251 * 0.05)}" />
+                                        </svg>
+                                        <div class="gauge-text text-white">5%</div>
+                                    </div>
+                                    <span class="text-xs font-bold uppercase tracking-tighter text-yellow-400">Ocioso</span>
+                                </div>
+                                <div class="flex flex-col items-center">
+                                    <div class="gauge-container mb-2">
+                                        <svg class="gauge-svg" width="100" height="100">
+                                            <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                                            <circle class="gauge-fill" cx="50" cy="50" r="40" style="stroke: #e74c3c; stroke-dasharray: 251; stroke-dashoffset: ${251 - (251 * 0.07)}" />
+                                        </svg>
+                                        <div class="gauge-text text-white">7%</div>
+                                    </div>
+                                    <span class="text-xs font-bold uppercase tracking-tighter text-red-400">Manutenção</span>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="flex flex-wrap items-center justify-between mb-6">
-                            <h2 class="text-2xl font-bold">Dashboard</h2>
+                            <h2 class="text-2xl font-bold text-gray-800 dark:text-white">Visão Geral</h2>
                             <div class="flex space-x-2">
-                                <button onclick="refreshDashboard()" class="flex items-center px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-primary-500">
-                                    <i class="fas fa-sync-alt mr-2"></i>
+                                <button onclick="refreshDashboard()" class="flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750 rounded-xl text-gray-700 dark:text-gray-200 shadow-sm transition focus:outline-none">
+                                    <i class="fas fa-sync-alt mr-2 text-primary-500"></i>
                                     Atualizar
                                 </button>
-                                <button onclick="printDashboard()" class="flex items-center px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-primary-500">
-                                    <i class="fas fa-print mr-2"></i>
+                                <button onclick="printDashboard()" class="flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750 rounded-xl text-gray-700 dark:text-gray-200 shadow-sm transition focus:outline-none">
+                                    <i class="fas fa-print mr-2 text-gray-500"></i>
                                     Imprimir
                                 </button>
                             </div>
                         </div>
                         
                         <!-- Quick Stats Cards -->
-                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                            <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 transition-transform hover:scale-105">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-md p-6 border-l-4 border-green-500 transition-transform hover:-translate-y-1">
                                 <div class="flex items-center">
-                                    <div class="rounded-full bg-green-100 dark:bg-green-900 p-3 mr-4">
-                                        <i class="fas fa-tractor text-green-500 dark:text-green-300"></i>
+                                    <div class="rounded-xl bg-green-50 dark:bg-green-900/30 p-3 mr-4 text-green-600 dark:text-green-400">
+                                        <i class="fas fa-tractor text-2xl"></i>
                                     </div>
                                     <div>
-                                        <p class="text-sm text-gray-500 dark:text-gray-400">Frentes Ativas</p>
-                                        <h3 class="text-2xl font-bold">${activeFronts}/${harvestFronts.length}</h3>
+                                        <p class="text-xs font-bold text-gray-400 uppercase tracking-widest">Frentes Ativas</p>
+                                        <h3 class="text-3xl font-black text-gray-800 dark:text-white">${activeFronts}/${harvestFronts.length}</h3>
                                     </div>
-                                </div>
-                                <div class="mt-3 text-xs text-gray-500">
-                                    <span class="${activeFronts > 0 ? 'text-green-500' : 'text-red-500'}">
-                                        <i class="fas ${activeFronts > 0 ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
-                                        ${((activeFronts / Math.max(harvestFronts.length, 1)) * 100).toFixed()}%
-                                    </span>
-                                    taxa de atividade
                                 </div>
                             </div>
                             
-                            <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 transition-transform hover:scale-105">
+                            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-md p-6 border-l-4 border-blue-500 transition-transform hover:-translate-y-1">
                                 <div class="flex items-center">
-                                    <div class="rounded-full bg-blue-100 dark:bg-blue-900 p-3 mr-4">
-                                        <i class="fas fa-route text-blue-500 dark:text-blue-300"></i>
+                                    <div class="rounded-xl bg-blue-50 dark:bg-blue-900/30 p-3 mr-4 text-blue-600 dark:text-blue-400">
+                                        <i class="fas fa-route text-2xl"></i>
                                     </div>
                                     <div>
-                                        <p class="text-sm text-gray-500 dark:text-gray-400">Rotas Registradas</p>
-                                        <h3 class="text-2xl font-bold">${completedRoutes}<span class="text-sm text-gray-500 ml-1">+${activeRoutes} ativas</span></h3>
+                                        <p class="text-xs font-bold text-gray-400 uppercase tracking-widest">Rotas Hoje</p>
+                                        <h3 class="text-3xl font-black text-gray-800 dark:text-white">${routesToday.length}</h3>
                                     </div>
-                                </div>
-                                <div class="mt-3 text-xs text-gray-500">
-                                    <span class="text-blue-500">
-                                        <i class="fas fa-plus"></i>
-                                        ${routesThisWeek.length}
-                                    </span>
-                                    nos últimos 7 dias
                                 </div>
                             </div>
                             
-                            <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 transition-transform hover:scale-105">
+                            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-md p-6 border-l-4 border-accent-medium transition-transform hover:-translate-y-1">
                                 <div class="flex items-center">
-                                    <div class="rounded-full bg-purple-100 dark:bg-purple-900 p-3 mr-4">
-                                        <i class="fas fa-truck text-purple-500 dark:text-purple-300"></i>
+                                    <div class="rounded-xl bg-green-50 dark:bg-green-900/30 p-3 mr-4 text-accent-medium">
+                                        <i class="fas fa-users text-2xl"></i>
                                     </div>
                                     <div>
-                                        <p class="text-sm text-gray-500 dark:text-gray-400">Motoristas Ativos</p>
-                                        <h3 class="text-2xl font-bold">${activeDrivers}/${drivers.length}</h3>
+                                        <p class="text-xs font-bold text-gray-400 uppercase tracking-widest">Motoristas</p>
+                                        <h3 class="text-3xl font-black text-gray-800 dark:text-white">${activeDrivers}</h3>
                                     </div>
-                                </div>
-                                <div class="mt-3 text-xs text-gray-500">
-                                    <span class="${activeDrivers > drivers.length/2 ? 'text-green-500' : 'text-yellow-500'}">
-                                        <i class="fas ${activeDrivers > drivers.length/2 ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i>
-                                        ${((activeDrivers / Math.max(drivers.length, 1)) * 100).toFixed()}%
-                                    </span>
-                                    da equipe disponível
                                 </div>
                             </div>
                             
-                            <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 transition-transform hover:scale-105">
+                            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-md p-6 border-l-4 border-amber-500 transition-transform hover:-translate-y-1">
                                 <div class="flex items-center">
-                                    <div class="rounded-full bg-amber-100 dark:bg-amber-900 p-3 mr-4">
-                                        <i class="fas fa-road text-amber-500 dark:text-amber-300"></i>
+                                    <div class="rounded-xl bg-amber-50 dark:bg-amber-900/30 p-3 mr-4 text-amber-600 dark:text-amber-400">
+                                        <i class="fas fa-tachometer-alt text-2xl"></i>
                                     </div>
                                     <div>
-                                        <p class="text-sm text-gray-500 dark:text-gray-400">Distância Total</p>
-                                        <h3 class="text-2xl font-bold">${totalDistance.toFixed(1)} <span class="text-sm">km</span></h3>
+                                        <p class="text-xs font-bold text-gray-400 uppercase tracking-widest">Distância Total</p>
+                                        <h3 class="text-3xl font-black text-gray-800 dark:text-white">${totalDistance.toFixed(0)} <span class="text-sm">km</span></h3>
                                     </div>
-                                </div>
-                                <div class="mt-3 text-xs text-gray-500">
-                                    <span class="text-amber-500">
-                                        <i class="fas fa-tachometer-alt"></i>
-                                        ${(totalDistance / Math.max(completedRoutes, 1)).toFixed(1)}
-                                    </span>
-                                    km por rota em média
                                 </div>
                             </div>
                         </div>
@@ -3078,7 +3230,7 @@
             }
         }
         
-        function renderAddHarvestFrontView() {
+        async function renderAddHarvestFrontView() {
             const appView = document.getElementById('app-view');
             appView.innerHTML = `
                 <div class="fade-in">
@@ -3516,7 +3668,7 @@
                                                                 ${front ? `
                                                                     <div class="w-2 h-2 rounded-full mr-2" style="background-color: ${front.color}"></div>
                                                                     ${front.name}
-                                                                ` : (route.frontId === 0 ? '<span class="text-gray-500 italic">Rota Sugerida</span>' : '<span class="text-red-500">Frente não encontrada</span>')}
+                                                                ` : (!route.frontId ? '<span class="text-gray-500 italic">Rota Sugerida</span>' : '<span class="text-red-500">Frente não encontrada</span>')}
                                                             </div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
@@ -5108,15 +5260,17 @@
                 
                 // Create polyline for route
                 const routePolyline = L.polyline(routePath, {
-                    color: '#5D5CDE',
-                    opacity: 1.0,
-                    weight: 5
+                    color: '#3B82F6', // Azul estilo Google Maps
+                    opacity: 0.8,
+                    weight: 8, // Espessura ajustada para o novo zoom
+                    lineJoin: 'round',
+                    lineCap: 'round'
                 }).addTo(map);
                 
                 // Create markers for start and end points
                 const startIcon = L.divIcon({
                     className: 'custom-div-icon',
-                    html: '<div style="background-color: #4CAF50; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white;"></div>',
+                    html: '<div style="background-color: #10B981; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
                     iconSize: [20, 20],
                     iconAnchor: [10, 10]
                 });
@@ -5128,7 +5282,7 @@
                 
                 const endIcon = L.divIcon({
                     className: 'custom-div-icon',
-                    html: '<div style="background-color: #F44336; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white;"></div>',
+                    html: '<div style="background-color: #EF4444; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
                     iconSize: [20, 20],
                     iconAnchor: [10, 10]
                 });
@@ -5145,9 +5299,9 @@
                 // Create position marker
                 const positionIcon = L.divIcon({
                     className: 'position-marker',
-                    html: '<div id="nav-arrow" style="transform: rotate(0deg); transition: transform 0.3s;"><i class="fas fa-location-arrow" style="color: #1E88E5; font-size: 24px; text-shadow: 0 0 2px white;"></i></div>',
-                    iconSize: [24, 24],
-                    iconAnchor: [12, 12]
+                    html: '<div id="nav-arrow" style="transform: rotate(0deg); transition: transform 0.5s ease-out; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.4));"><i class="fas fa-location-arrow" style="color: #1D4ED8; font-size: 28px; -webkit-text-stroke: 2px white;"></i></div>',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
                 });
                 
                 const positionMarker = L.marker(startPoint, {
@@ -5174,6 +5328,14 @@
                 
                 // Add route markers at important points (every ~1/5 of the route)
                 addRouteWaypoints(map, routePath);
+                
+                // Desativa o acompanhamento automático se o usuário arrastar o mapa
+                map.on('dragstart', () => {
+                    if (navigationState.autoFollow) {
+                        navigationState.autoFollow = false;
+                        showToast('Acompanhamento automático pausado. Clique em Centralizar para retomar.', 'info');
+                    }
+                });
                 
                 setTimeout(() => {
                     map.invalidateSize();
@@ -5225,7 +5387,7 @@
             });
         }
         
-        function startNavigation() {
+        async function startNavigation() {
             if (!navigationState.route || !navigationState.map) {
                 showToast('Erro: Rota não disponível para navegação', 'error');
                 return;
@@ -5236,9 +5398,82 @@
                 document.getElementById('start-navigation-btn').disabled = true;
                 document.getElementById('stop-navigation-btn').disabled = false;
                 
+                // --- Recalcular rota se não estiver na Usina Cambuí ---
+                const USINA_CAMBUI_LOCATION = { lat: -17.924714302556936, lng: -50.63708775318097 };
+                
+                if (navigator.geolocation) {
+                    showLoading('Validando ponto de partida...');
+                    try {
+                        const position = await new Promise((resolve, reject) => {
+                            navigator.geolocation.getCurrentPosition(resolve, reject, { 
+                                enableHighAccuracy: true, 
+                                timeout: 10000 
+                            });
+                        });
+                        
+                        const userLat = position.coords.latitude;
+                        const userLng = position.coords.longitude;
+                        
+                        const distToUsina = haversineDistance(userLat, userLng, USINA_CAMBUI_LOCATION.lat, USINA_CAMBUI_LOCATION.lng);
+                        
+                        // Se estiver a mais de 500 metros da usina, recalcula a rota
+                        if (distToUsina > 0.5) {
+                            showLoading('Recalculando rota da sua posição atual...');
+                            
+                            const destination = navigationState.route.path[navigationState.route.path.length - 1];
+                            const url = `https://router.project-osrm.org/route/v1/driving/${userLng},${userLat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+                            
+                            const response = await fetch(url);
+                            const data = await response.json();
+                            
+                            if (data.routes && data.routes.length > 0) {
+                                const newPath = data.routes[0].geometry.coordinates.map(c => ({
+                                    lat: c[1],
+                                    lng: c[0],
+                                    timestamp: Date.now()
+                                }));
+                                
+                                // Atualiza a rota no estado
+                                navigationState.route.path = newPath;
+                                navigationState.route.distance = data.routes[0].distance / 1000;
+                                
+                                // Atualiza a polyline no mapa
+                                const latLngs = newPath.map(p => [p.lat, p.lng]);
+                                if (navigationState.routePolyline) {
+                                    navigationState.routePolyline.setLatLngs(latLngs);
+                                }
+                                
+                                // Atualiza o marcador de início
+                                if (navigationState.startMarker) {
+                                    navigationState.startMarker.setLatLng([newPath[0].lat, newPath[0].lng]);
+                                }
+                                
+                                // Ajusta o mapa para a nova rota
+                                if (navigationState.map) {
+                                    navigationState.map.fitBounds(latLngs, { padding: [50, 50] });
+                                }
+                                
+                                showToast('Rota recalculada a partir do seu local atual.', 'info');
+                            }
+                        }
+                    } catch (geoErr) {
+                        console.warn('Erro ao verificar posição inicial:', geoErr);
+                    }
+                    hideLoading();
+                }
+                
                 // Set navigation as active
                 navigationState.active = true;
                 navigationState.navigationStartTime = new Date();
+                navigationState.isFirstUpdate = true; // Reset first update flag
+                
+                // Animação inicial estilo Google Maps: aproxima do ponto inicial
+                const startPoint = [navigationState.route.path[0].lat, navigationState.route.path[0].lng];
+                navigationState.map.flyTo(startPoint, 17, {
+                    animate: true,
+                    duration: 2.0,
+                    easeLinearity: 0.25
+                });
                 
                 // Start tracking location
                 if (navigator.geolocation) {
@@ -5323,7 +5558,14 @@
                 // Update accuracy circle
                 if (navigationState.accuracyCircle) {
                     navigationState.accuracyCircle.setLatLng(latLng);
-                    navigationState.accuracyCircle.setRadius(accuracy);
+                    // No Google Maps, o círculo de precisão só aparece se a precisão for ruim
+                    // Vamos esconder se a precisão for melhor que 10 metros
+                    if (accuracy < 10) {
+                        navigationState.accuracyCircle.setStyle({ fillOpacity: 0, opacity: 0 });
+                    } else {
+                        navigationState.accuracyCircle.setRadius(accuracy);
+                        navigationState.accuracyCircle.setStyle({ fillOpacity: 0.1, opacity: 0.2 });
+                    }
                 }
                 
                 // Update marker rotation based on heading if moving
@@ -5351,7 +5593,25 @@
                 
                 // Center map on user location if auto-follow is enabled
                 if (navigationState.autoFollow) {
-                    navigationState.map.panTo(latLng);
+                    // Zoom dinâmico: se estiver rápido, zoom menor (16); se estiver parado/lento, zoom maior (17.5)
+                    const targetZoom = speed > 30 ? 16 : (speed > 10 ? 16.5 : 17.5);
+                    
+                    if (navigationState.isFirstUpdate) {
+                        // Fly to first actual position update smoothly
+                        navigationState.map.flyTo(latLng, targetZoom, {
+                            animate: true,
+                            duration: 1.5,
+                            easeLinearity: 0.25
+                        });
+                        navigationState.isFirstUpdate = false;
+                    } else {
+                        // Keep following with smooth animation
+                        navigationState.map.setView(latLng, targetZoom, {
+                            animate: true,
+                            pan: { duration: 1.0 },
+                            zoom: { animate: true }
+                        });
+                    }
                 }
                 
                 // Store speed report for analysis
@@ -5637,19 +5897,18 @@
         function centerMapOnUserLocation() {
             if (!navigationState.map || !navigationState.positionMarker) return;
             
-            const position = navigationState.positionMarker.getPosition();
-            if (position) {
-                navigationState.map.panTo(position);
-                navigationState.map.setZoom(18);
+            const latLng = navigationState.positionMarker.getLatLng();
+            if (latLng) {
+                // Fly to user location smoothly with balanced zoom
+                navigationState.map.flyTo(latLng, 17.5, {
+                    animate: true,
+                    duration: 1.0,
+                    easeLinearity: 0.25
+                });
                 
                 // Enable auto-follow mode
                 navigationState.autoFollow = true;
                 showToast('Seguindo sua localização', 'info');
-                
-                // Disable auto-follow after 10 seconds
-                setTimeout(() => {
-                    navigationState.autoFollow = false;
-                }, 10000);
             } else {
                 showToast('Localização atual não disponível', 'warning');
             }
@@ -6338,11 +6597,12 @@
                 
                 if (currentUserRole === 'leader' || currentUserRole === 'admin') {
                     try {
-                        const dbFirestore = firebase.firestore();
-                        const snapshot = await dbFirestore.collection('users').where('role', '==', 'driver').get();
-                        snapshot.forEach(doc => {
-                            driverUsers.push({ id: doc.id, ...doc.data() });
-                        });
+                        const { data, error } = await supabaseClient
+                            .from('users')
+                            .select('*')
+                            .eq('role', 'driver');
+                        if (error) throw error;
+                        driverUsers = data || [];
                     } catch (e) {
                         console.error('Erro ao buscar motoristas:', e);
                     }
@@ -7045,7 +7305,7 @@
                 try {
                     const expectedRouteName = `Rota Sugerida - ${location}`;
                     const suggestedRoutes = await db.routes
-                        .filter(r => (r.name === expectedRouteName || (r.tags && r.tags.includes('sugerida') && r.name.includes(location))) && (!r.frontId || r.frontId === 0))
+                        .filter(r => (r.name === expectedRouteName || (r.tags && r.tags.includes('sugerida') && r.name.includes(location))) && (!r.frontId))
                         .toArray();
                     
                     if (suggestedRoutes.length > 0) {
@@ -7890,9 +8150,35 @@
             event.preventDefault();
             
             const name = document.getElementById('farmName').value;
+            const method = document.querySelector('input[name="locationMethod"]:checked').value;
+            
+            // Se for manual e não houver preview, tentar gerar o GeoJSON agora
+            if (method === 'manual' && !currentFarmGeoJson) {
+                const input = document.getElementById('farmCoordinates').value;
+                if (input) {
+                    try {
+                        const parts = input.split(',').map(p => parseFloat(p.trim()));
+                        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                            currentFarmGeoJson = {
+                                type: "FeatureCollection",
+                                features: [{
+                                    type: "Feature",
+                                    properties: { name: "Localização Manual" },
+                                    geometry: {
+                                        type: "Point",
+                                        coordinates: [parts[1], parts[0]]
+                                    }
+                                }]
+                            };
+                        }
+                    } catch (e) {
+                        console.error('Erro ao processar coordenadas manuais no salvamento:', e);
+                    }
+                }
+            }
             
             if (!name || !currentFarmGeoJson) {
-                showToast('Por favor, preencha o nome e importe um KML válido.', 'warning');
+                showToast('Por favor, preencha o nome e importe um KML ou digite coordenadas válidas.', 'warning');
                 return;
             }
             
@@ -7911,15 +8197,9 @@
                     ...timestamps
                 };
                 
-                const farmSyncData = {
-                    name,
-                    status: 'active',
-                    ...timestamps
-                };
-                
                 const id = await db.farms.add(farmData);
 
-                // Generate suggested route from KML
+                // Generate suggested route from KML/Location
                 if (currentFarmGeoJson) {
                     try {
                         let routePath = [];
@@ -8015,7 +8295,8 @@
 
                              const suggestedRoute = {
                                 name: `Rota Sugerida - ${name}`,
-                                frontId: 0, 
+                                frontId: null, 
+                                farmId: id,
                                 startTime: new Date().toISOString(),
                                 status: 'active', 
                                 tags: tags,
@@ -8026,9 +8307,7 @@
                             };
                             
                             const routeId = await db.routes.add(suggestedRoute);
-                            // Important: Sync the route immediately to Firestore. 
-                            // If we don't, subsequent updates (like linking to a front) will create a partial document in Firestore,
-                            // which then syncs back and overwrites the local route with empty data.
+                            // Important: Sync the route immediately to Supabase
                             await addToSyncQueue('add', 'routes', routeId, { ...suggestedRoute, id: routeId });
                         }
                     } catch (e) {
@@ -8036,7 +8315,7 @@
                     }
                 }
                 
-                await addToSyncQueue('add', 'farms', id, { ...farmSyncData, id });
+                await addToSyncQueue('add', 'farms', id, { ...farmData, id });
                 
                 hideLoading();
                 showToast('Fazenda cadastrada com sucesso!', 'success');
@@ -8668,10 +8947,8 @@
                         // Save to database
                         const routeId = await db.routes.add(newRoute);
                         
-                        // Add to sync queue for offline support
-                        if (!navigator.onLine) {
-                            await addToSyncQueue('add', 'routes', routeId, { ...newRoute, id: routeId });
-                        }
+                        // Add to sync queue for Supabase
+                        await addToSyncQueue('add', 'routes', routeId, { ...newRoute, id: routeId });
                         
                         // Allow screen to sleep again
                         keepScreenOn(false);
@@ -9444,20 +9721,19 @@
             `;
             
             try {
-                const dbFirestore = firebase.firestore();
                 console.log('Carregando usuários...');
-                const snapshot = await dbFirestore.collection('users').get();
-                console.log('Usuários encontrados:', snapshot.size);
+                const { data: users, error } = await supabaseClient
+                    .from('users')
+                    .select('*');
                 
-                const users = [];
-                snapshot.forEach(doc => {
-                    users.push({ id: doc.id, ...doc.data() });
-                });
+                if (error) throw error;
+                
+                console.log('Usuários encontrados:', users.length);
                 
                 const tbody = document.getElementById('users-table-body');
                 tbody.innerHTML = '';
                 
-                if (users.length === 0) {
+                if (!users || users.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-4 text-center">Nenhum usuário encontrado no banco de dados.</td></tr>';
                     return;
                 }
@@ -9491,16 +9767,20 @@
             } catch (e) {
                 console.error('Erro ao listar usuários:', e);
                 const tbody = document.getElementById('users-table-body');
-                if (tbody) tbody.innerHTML = `<tr><td colspan="4" class="px-6 py-4 text-center text-red-500">Erro ao carregar: ${e.message}<br>Verifique as regras do Firestore.</td></tr>`;
-                showToast('Erro ao carregar usuários: ' + e.message, 'error');
+                if (tbody) tbody.innerHTML = `<tr><td colspan="4" class="px-6 py-4 text-center text-red-500">Erro ao carregar: ${e.message}</td></tr>`;
             }
         }
         
         async function updateUserRole(userId, newRole) {
             try {
                 showLoading('Atualizando permissão...');
-                const dbFirestore = firebase.firestore();
-                await dbFirestore.collection('users').doc(userId).update({ role: newRole });
+                const { error } = await supabaseClient
+                    .from('users')
+                    .update({ role: newRole })
+                    .eq('id', userId);
+                
+                if (error) throw error;
+                
                 hideLoading();
                 showToast('Permissão atualizada com sucesso.', 'success');
             } catch (e) {
