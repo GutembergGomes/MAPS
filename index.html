@@ -653,12 +653,12 @@
         
         // Database setup with improved schema and indexing
         // Mudando nome do banco para garantir que inicie zerado (nova versão sem dados antigos)
-        const db = new Dexie('AgroRotaDB_Prod');
-        db.version(3).stores({
-            harvestFronts: '++id, name, status, createdAt, updatedAt',
-            routes: '++id, frontId, farmId, startTime, status, createdAt, updatedAt, *tags',
-            drivers: '++id, name, status, assignedFront, createdAt, updatedAt',
-            farms: '++id, name, status, createdAt, updatedAt',
+        const db = new Dexie('AgroRotaDB_V5');
+        db.version(1).stores({
+            harvestFronts: 'id, name, status, createdAt, updatedAt',
+            routes: 'id, frontId, farmId, startTime, status, createdAt, updatedAt, *tags',
+            drivers: 'id, name, status, assignedFront, createdAt, updatedAt',
+            farms: 'id, name, status, createdAt, updatedAt',
             settings: 'key',
             syncQueue: '++id, action, tableName, itemId, data, timestamp, retries, status'
         });
@@ -769,11 +769,17 @@
                     if (error) throw error;
                     
                     if (data && data.length > 0) {
-                        const camelData = data.map(item => snakeToCamel(item));
+                        // Filter out records with invalid IDs (non-numeric) to avoid bigint errors later
+                        const validData = data.filter(item => !isNaN(item.id) || /^\d+$/.test(item.id));
+                        if (validData.length < data.length) {
+                            console.warn(`[Sync] Ignorando ${data.length - validData.length} registros com ID inválido do servidor.`);
+                        }
+                        
+                        const camelData = validData.map(item => snakeToCamel(item));
                         // Clear local table and refill with cloud data
                         await db[dexieTableName].clear();
                         await db[dexieTableName].bulkPut(camelData);
-                        console.log(`Synced ${data.length} items for ${dexieTableName}`);
+                        console.log(`Synced ${validData.length} items for ${dexieTableName}`);
                     }
                 }
                 appLog('Sincronização concluída com sucesso!');
@@ -790,15 +796,36 @@
         async function processSyncQueue() {
             if (!navigator.onLine) return;
             
-            const queueItems = await db.syncQueue.orderBy('timestamp').toArray();
-            if (queueItems.length === 0) return;
+            console.log(`[Sync] Verificando fila de sincronização em ${db.name}...`);
             
-            console.log(`Processing ${queueItems.length} items in sync queue...`);
+            // Priority order for tables to avoid foreign key violations
+            const priorityOrder = {
+                'farms': 1,
+                'harvestFronts': 2,
+                'drivers': 3,
+                'routes': 4
+            };
+            
+            let queueItems = await db.syncQueue.orderBy('timestamp').toArray();
+            if (queueItems.length === 0) {
+                console.log('[Sync] Fila vazia.');
+                return;
+            }
+            
+            // Sort by priority then by timestamp
+            queueItems.sort((a, b) => {
+                const prioA = priorityOrder[a.tableName] || 99;
+                const prioB = priorityOrder[b.tableName] || 99;
+                if (prioA !== prioB) return prioA - prioB;
+                return new Date(a.timestamp) - new Date(b.timestamp);
+            });
+            
+            console.log(`[Sync] Processando ${queueItems.length} itens...`);
             
             const { data: { session } } = await supabaseClient.auth.getSession();
             
             if (!session) {
-                console.log('No session, skipping sync');
+                console.warn('[Sync] Usuário não autenticado, adiando sincronização.');
                 return;
             }
             
@@ -807,6 +834,14 @@
                     // Skip if already processing
                     if (item.status === 'processing') continue;
                     
+                    // Validação de ID: Se não for numérico, ignorar itens antigos que causam erro de bigint
+                    const isNumericId = !isNaN(item.itemId) || /^\d+$/.test(item.itemId);
+                    if (!isNumericId) {
+                        console.error(`[Sync] Item ${item.id} ignorado por ID inválido (não-numérico): ${item.itemId}`);
+                        await db.syncQueue.delete(item.id);
+                        continue;
+                    }
+                    
                     // Mark as processing
                     await db.syncQueue.update(item.id, { status: 'processing' });
                     
@@ -814,28 +849,53 @@
                     const syncData = camelToSnake(item.data);
                     
                     if (item.action === 'create' || item.action === 'update' || item.action === 'add') {
+                        // Limpar campos que não devem ir para o Supabase
+                        const cleanSyncData = { ...syncData };
+                        delete cleanSyncData.id; 
+
+                        console.log(`[Sync] Enviando ${item.action} para ${supabaseTableName} (ID: ${item.itemId})`);
+
                         const { error } = await supabaseClient
                             .from(supabaseTableName)
-                            .upsert({ ...syncData, id: item.itemId });
-                        if (error) throw error;
-                        console.log(`Synced ${item.action} for ${item.tableName}/${item.itemId} to Supabase (${supabaseTableName})`);
+                            .upsert({ ...cleanSyncData, id: item.itemId });
+                        
+                        if (error) {
+                            // Se for erro de sintaxe de tipo (ID inválido no servidor), deletar da fila para não travar
+                            if (error.code === '22P02') {
+                                console.error(`[Sync] Erro de tipo (bigint) para ID ${item.itemId}. Removendo da fila.`);
+                                await db.syncQueue.delete(item.id);
+                                continue;
+                            }
+                            // Se for erro de chave estrangeira (23503), vamos tentar novamente mais tarde
+                            if (error.code === '23503') {
+                                console.warn(`[Sync] Erro FK para ${item.tableName}/${item.itemId}, aguardando dependência.`);
+                                await db.syncQueue.update(item.id, { 
+                                    status: 'pending', 
+                                    retries: (item.retries || 0) + 1,
+                                    error: 'Foreign key violation'
+                                });
+                                continue;
+                            }
+                            throw error;
+                        }
+                        console.log(`[Sync] Sucesso: ${item.tableName}/${item.itemId}`);
                     } else if (item.action === 'delete') {
                         const { error } = await supabaseClient
                             .from(supabaseTableName)
                             .delete()
                             .eq('id', item.itemId);
                         if (error) throw error;
-                        console.log(`Synced delete for ${item.tableName}/${item.itemId} from Supabase (${supabaseTableName})`);
+                        console.log(`[Sync] Deletado: ${item.tableName}/${item.itemId}`);
                     }
                     
                     // If successful, remove from queue
                     await db.syncQueue.delete(item.id);
                     
                 } catch (error) {
-                    console.error(`Sync error for item ${item.id}:`, error);
+                    console.error(`[Sync] Erro crítico no item ${item.id}:`, error);
                     
                     // Increment retries or fail
-                    if (item.retries >= 3) {
+                    if (item.retries >= 5) {
                         await db.syncQueue.update(item.id, { status: 'failed', error: error.message });
                     } else {
                         await db.syncQueue.update(item.id, { 
@@ -1035,6 +1095,15 @@
                 }
             }
         };
+
+        // Helper to generate Numeric IDs for offline-first synchronization
+        // Fits in Postgres BIGINT and JavaScript safe integer range
+        function generateNumericID() {
+            const timestamp = Date.now(); // 13 digits
+            const random = Math.floor(Math.random() * 1000); // 3 digits
+            // Result is 16 digits, well within JS Number.MAX_SAFE_INTEGER (16 digits)
+            return parseInt(`${timestamp}${random.toString().padStart(3, '0')}`);
+        }
         
         function isDriverRole(role) {
             return role === 'driver';
@@ -1148,15 +1217,23 @@
             try {
                 showLoading('Inicializando banco de dados...');
                 
-                // Abre o banco de dados
+                // Abre o novo banco de dados v5
                 await db.open();
-                console.log('Banco de dados local aberto.');
+                console.log('Banco de dados local (V5) aberto.');
 
                 hideLoading();
                 return true;
             } catch (error) {
                 console.error('Erro ao inicializar banco de dados:', error);
-                showToast('Erro ao inicializar banco de dados. Alguns recursos podem não funcionar corretamente.', 'error');
+                showToast('Erro ao inicializar banco de dados. Tentando resetar...', 'error');
+                
+                try {
+                    await Dexie.delete('AgroRotaDB_V5');
+                    window.location.reload();
+                } catch (e) {
+                    console.error('Falha ao deletar banco:', e);
+                }
+                
                 hideLoading();
                 return false;
             }
@@ -2484,6 +2561,13 @@
                                     </div>
                                     <span class="text-sm font-medium">Ver Relatórios</span>
                                 </button>
+
+                                <button onclick="forceFullResync()" class="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col items-center justify-center text-center hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                                    <div class="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900 flex items-center justify-center text-red-500 dark:text-red-300 mb-2">
+                                        <i class="fas fa-sync-alt"></i>
+                                    </div>
+                                    <span class="text-sm font-medium text-red-600">Forçar Sinc</span>
+                                </button>
                             </div>
                         </div>
                         
@@ -2533,6 +2617,27 @@
                     </div>
                 `;
             }
+        }
+        
+        // Forçar ressincronização completa (limpa local e busca do servidor)
+        async function forceFullResync() {
+            showConfirmModal(
+                'Forçar Ressincronização',
+                'Isso apagará todos os dados locais NÃO SINCRONIZADOS e recarregará tudo do servidor. Deseja continuar?',
+                async () => {
+                    try {
+                        showLoading('Limpando banco de dados...');
+                        // Deletar o banco de dados atual
+                        await db.delete();
+                        // Recarregar a página para reinicializar tudo
+                        window.location.reload();
+                    } catch (error) {
+                        console.error('Erro ao forçar resync:', error);
+                        showToast('Erro ao resetar dados.', 'error');
+                        hideLoading();
+                    }
+                }
+            );
         }
         
         // Check for failed sync items and show notification if needed
@@ -7288,7 +7393,9 @@
                     }
                 }
                 
+                const id = generateNumericID();
                 const newFront = {
+                    id,
                     name,
                     description,
                     location,
@@ -7299,7 +7406,7 @@
                 };
                 
                 // Add to database
-                const id = await db.harvestFronts.add(newFront);
+                await db.harvestFronts.add(newFront);
                 
                 // === Vincular Rotas Sugeridas Automaticamente ===
                 try {
@@ -7652,7 +7759,9 @@
                     }
                 }
                 
+                const id = generateNumericID();
                 const newDriver = {
+                    id,
                     name,
                     phone,
                     license,
@@ -7666,7 +7775,7 @@
                 };
                 
                 // Add to database
-                const id = await db.drivers.add(newDriver);
+                await db.drivers.add(newDriver);
                 
                 await addToSyncQueue('add', 'drivers', id, { ...newDriver, id });
                 
@@ -8185,19 +8294,21 @@
             try {
                 showLoading('Salvando fazenda...');
                 
+                const id = generateNumericID();
                 const timestamps = {
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString()
                 };
                 
                 const farmData = {
+                    id,
                     name,
                     geoJson: currentFarmGeoJson,
                     status: 'active',
                     ...timestamps
                 };
                 
-                const id = await db.farms.add(farmData);
+                await db.farms.add(farmData);
 
                 // Generate suggested route from KML/Location
                 if (currentFarmGeoJson) {
@@ -8293,7 +8404,9 @@
                              const tags = ['sugerida', 'kml', 'auto-generated'];
                              if (distance > 5) tags.push('usina-to-farm');
 
+                             const routeId = generateNumericID();
                              const suggestedRoute = {
+                                id: routeId,
                                 name: `Rota Sugerida - ${name}`,
                                 frontId: null, 
                                 farmId: id,
@@ -8306,7 +8419,7 @@
                                 updatedAt: new Date().toISOString()
                             };
                             
-                            const routeId = await db.routes.add(suggestedRoute);
+                            await db.routes.add(suggestedRoute);
                             // Important: Sync the route immediately to Supabase
                             await addToSyncQueue('add', 'routes', routeId, { ...suggestedRoute, id: routeId });
                         }
@@ -8928,7 +9041,9 @@
                         const compressedPath = compressPathData(currentRecording.path);
                         
                         // Create route object
+                        const routeId = generateNumericID();
                         const newRoute = {
+                            id: routeId,
                             frontId: currentRecording.frontId,
                             name: currentRecording.name,
                             description: currentRecording.description,
@@ -8945,7 +9060,7 @@
                         };
                         
                         // Save to database
-                        const routeId = await db.routes.add(newRoute);
+                        await db.routes.add(newRoute);
                         
                         // Add to sync queue for Supabase
                         await addToSyncQueue('add', 'routes', routeId, { ...newRoute, id: routeId });
