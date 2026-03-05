@@ -756,11 +756,12 @@
             
             const dexieTables = ['harvestFronts', 'routes', 'drivers', 'farms'];
             
-            showLoading('Sincronizando dados...');
-            appLog('Iniciando sincronização completa do Supabase...');
+            showToast('Sincronizando dados com o servidor...', 'info');
+            console.log('[Sync] Iniciando sincronização completa paralela...');
             
             try {
-                for (const dexieTableName of dexieTables) {
+                // Fetch all data in parallel to reduce network latency impact
+                const syncPromises = dexieTables.map(async (dexieTableName) => {
                     const supabaseTableName = TABLE_MAP[dexieTableName];
                     const { data, error } = await supabaseClient
                         .from(supabaseTableName)
@@ -769,26 +770,37 @@
                     if (error) throw error;
                     
                     if (data && data.length > 0) {
-                        // Filter out records with invalid IDs (non-numeric) to avoid bigint errors later
                         const validData = data.filter(item => !isNaN(item.id) || /^\d+$/.test(item.id));
-                        if (validData.length < data.length) {
-                            console.warn(`[Sync] Ignorando ${data.length - validData.length} registros com ID inválido do servidor.`);
-                        }
-                        
                         const camelData = validData.map(item => snakeToCamel(item));
-                        // Clear local table and refill with cloud data
-                        await db[dexieTableName].clear();
-                        await db[dexieTableName].bulkPut(camelData);
-                        console.log(`Synced ${validData.length} items for ${dexieTableName}`);
+                        
+                        // Use a transaction for better performance and consistency
+                        await db.transaction('rw', db[dexieTableName], async () => {
+                            await db[dexieTableName].clear();
+                            await db[dexieTableName].bulkPut(camelData);
+                        });
+                        
+                        console.log(`[Sync] Sucesso: ${dexieTableName} (${validData.length} itens)`);
+                        return validData.length;
                     }
+                    return 0;
+                });
+                
+                const results = await Promise.all(syncPromises);
+                const totalItems = results.reduce((sum, count) => sum + count, 0);
+                
+                console.log(`[Sync] Sincronização concluída: ${totalItems} itens no total.`);
+                showToast('Dados sincronizados com sucesso!', 'success');
+                
+                // Se o usuário estiver em uma view que depende desses dados, atualiza a view
+                const currentView = AppState.currentView;
+                const dataDependentViews = ['dashboard', 'harvest-fronts', 'routes', 'farms', 'drivers', 'driver'];
+                if (dataDependentViews.includes(currentView)) {
+                    console.log(`[Sync] Atualizando view '${currentView}' após sincronização...`);
+                    showView(currentView, { replace: true, noAnimation: true });
                 }
-                appLog('Sincronização concluída com sucesso!');
             } catch (error) {
                 console.error('Error in syncAllFromSupabase:', error);
-                appLog(`Erro na sincronização: ${error.message}`, true);
-                showToast('Erro ao sincronizar dados com o servidor.', 'error');
-            } finally {
-                hideLoading();
+                showToast('Erro ao sincronizar dados. Verifique sua conexão.', 'error');
             }
         }
 
@@ -1327,8 +1339,9 @@
                                     showView('dashboard', { replace: true });
                                 }
                                 
-                                // Sincronização inicial completa do servidor para o local
-                                await syncAllFromSupabase();
+                                // Inicia a sincronização em background logo após mostrar a view inicial
+                                // Não usamos await aqui para liberar o fluxo da UI imediatamente
+                                syncAllFromSupabase().catch(e => console.error('Erro na sincronização inicial:', e));
                                 
                                 setupSupabaseListeners();
                                 processSyncQueue();
@@ -2194,17 +2207,15 @@
             const appView = document.getElementById('app-view');
             
             try {
-                // Get data from database
-                const harvestFronts = await db.harvestFronts.toArray();
-                const routes = await db.routes.toArray();
-                const drivers = await db.drivers.toArray();
+                // Get data from database in parallel
+                const [harvestFronts, routes, drivers] = await Promise.all([
+                    db.harvestFronts.toArray(),
+                    db.routes.toArray(),
+                    db.drivers.toArray()
+                ]);
                 
-                // Process route paths for any that might be compressed
-                routes.forEach(route => {
-                    if (route.path && route.path._compressed) {
-                        route.path = decompressPathData(route.path);
-                    }
-                });
+                // Removemos a descompressão de caminhos aqui, pois o dashboard não precisa das coordenadas
+                // Isso economiza MUITO tempo de processamento inicial
                 
                 // Calculate stats
                 const activeFronts = harvestFronts.filter(front => front.status === 'active').length;
@@ -2824,8 +2835,11 @@
         
         async function renderHarvestFrontsView() {
             try {
-                const harvestFronts = await db.harvestFronts.toArray();
-                const drivers = await db.drivers.toArray();
+                // Fetch data in parallel
+                const [harvestFronts, drivers] = await Promise.all([
+                    db.harvestFronts.toArray(),
+                    db.drivers.toArray()
+                ]);
                 
                 const appView = document.getElementById('app-view');
                 appView.innerHTML = `
@@ -4413,12 +4427,18 @@
         
         async function renderRouteDetailsView(frontId, routeId) {
             try {
-                let front = null;
                 const fId = parseInt(frontId);
+                const rId = routeId ? parseInt(routeId) : null;
                 
-                if (fId !== 0) {
-                    front = await db.harvestFronts.get(fId);
+                if (rId === null || isNaN(rId)) {
+                    throw new Error("ID da rota inválido");
                 }
+                
+                // Fetch front and route in parallel
+                let [front, route] = await Promise.all([
+                    fId !== 0 ? db.harvestFronts.get(fId) : Promise.resolve(null),
+                    db.routes.get(rId)
+                ]);
                 
                 // Handle suggested routes or missing fronts
                 if (!front) {
@@ -4437,12 +4457,6 @@
                     }
                 }
                 
-                const rId = routeId ? parseInt(routeId) : null;
-                if (rId === null || isNaN(rId)) {
-                    throw new Error("ID da rota inválido");
-                }
-                
-                const route = await db.routes.get(rId);
                 if (!route) {
                     showToast('Rota não encontrada', 'error');
                     showView('routes');
