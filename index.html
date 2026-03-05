@@ -5000,8 +5000,11 @@
                     }
                 });
                 
-                // Get active routes (completed or active)
-                const activeRoutes = routes.filter(route => route.status === 'completed' || route.status === 'active');
+                // Get active routes (completed or active) that have a front assigned
+                const activeRoutes = routes.filter(route => 
+                    (route.status === 'completed' || route.status === 'active') && 
+                    (route.frontId && route.frontId !== 0)
+                );
                 
                 const appView = document.getElementById('app-view');
                 appView.innerHTML = `
