@@ -654,11 +654,12 @@
         // Database setup with improved schema and indexing
         // Mudando nome do banco para garantir que inicie zerado (nova versão sem dados antigos)
         const db = new Dexie('AgroRotaDB_V5');
-        db.version(1).stores({
+        db.version(2).stores({
             harvestFronts: 'id, name, status, createdAt, updatedAt',
             routes: 'id, frontId, farmId, startTime, status, createdAt, updatedAt, *tags',
             drivers: 'id, name, status, assignedFront, createdAt, updatedAt',
             farms: 'id, name, status, createdAt, updatedAt',
+            users: 'id, name, role, email, status, profile_completed',
             settings: 'key',
             syncQueue: '++id, action, tableName, itemId, data, timestamp, retries, status'
         });
@@ -754,7 +755,7 @@
             const { data: { session } } = await supabaseClient.auth.getSession();
             if (!session) return;
             
-            const dexieTables = ['harvestFronts', 'routes', 'drivers', 'farms'];
+            const dexieTables = ['harvestFronts', 'routes', 'drivers', 'farms', 'users'];
             
             showToast('Sincronizando dados com o servidor...', 'info');
             console.log('[Sync] Iniciando sincronização completa paralela...');
@@ -927,7 +928,7 @@
         
         // Setup Supabase Realtime listeners
         function setupSupabaseListeners() {
-            const dexieTables = ['harvestFronts', 'routes', 'drivers', 'farms'];
+            const dexieTables = ['harvestFronts', 'routes', 'drivers', 'farms', 'users'];
             
             dexieTables.forEach(dexieTableName => {
                 const supabaseTableName = TABLE_MAP[dexieTableName];
@@ -2208,18 +2209,50 @@
             
             try {
                 // Get data from database in parallel
-                const [harvestFronts, routes, drivers] = await Promise.all([
+                const [harvestFronts, routes, drivers, systemUsers] = await Promise.all([
                     db.harvestFronts.toArray(),
                     db.routes.toArray(),
-                    db.drivers.toArray()
+                    db.drivers.toArray(),
+                    db.users.toArray()
                 ]);
+                
+                // Combine physical drivers and system users with 'driver' role
+                // We use a Map to avoid duplicates by name or email
+                const combinedDriversMap = new Map();
+                
+                // Add physical drivers first
+                drivers.forEach(d => {
+                    combinedDriversMap.set(d.name.toLowerCase(), {
+                        name: d.name,
+                        status: d.status,
+                        assignedFront: d.assignedFront,
+                        type: 'resource'
+                    });
+                });
+                
+                // Add system users with driver role if not already present
+                systemUsers.forEach(u => {
+                    if (u.role === 'driver' && u.name) {
+                        const key = u.name.toLowerCase();
+                        if (!combinedDriversMap.has(key)) {
+                            combinedDriversMap.set(key, {
+                                name: u.name,
+                                status: 'active', // System users are active by default if they can login
+                                assignedFront: null, // System users don't have assignedFront in users table yet
+                                type: 'user'
+                            });
+                        }
+                    }
+                });
+                
+                const allDrivers = Array.from(combinedDriversMap.values());
                 
                 // Removemos a descompressão de caminhos aqui, pois o dashboard não precisa das coordenadas
                 // Isso economiza MUITO tempo de processamento inicial
                 
                 // Calculate stats
                 const activeFronts = harvestFronts.filter(front => front.status === 'active').length;
-                const activeDrivers = drivers.filter(driver => driver.status === 'active').length;
+                const activeDrivers = allDrivers.filter(driver => driver.status === 'active').length;
                 const completedRoutes = routes.filter(route => route.status === 'completed').length;
                 const activeRoutes = routes.filter(route => route.status === 'active').length;
                 const totalDistance = routes.reduce((sum, route) => sum + (route.distance || 0), 0);
@@ -2465,8 +2498,8 @@
                                     </button>
                                 </div>
                                 <div class="p-4">
-                                    ${drivers.length > 0 ? 
-                                        drivers
+                                    ${allDrivers.length > 0 ? 
+                                        allDrivers
                                             .filter(driver => driver.status === 'active')
                                             .slice(0, 3)
                                             .map((driver, index) => {
@@ -2478,7 +2511,7 @@
                                                         </div>
                                                         <div class="flex-1">
                                                             <h4 class="font-medium">${driver.name}</h4>
-                                                            <p class="text-sm text-gray-500 dark:text-gray-400">${front?.name || 'Nenhuma frente atribuída'}</p>
+                                                            <p class="text-sm text-gray-500 dark:text-gray-400">${front?.name || (driver.type === 'user' ? 'Usuário do Sistema' : 'Nenhuma frente atribuída')}</p>
                                                         </div>
                                                         <span class="text-xs px-2 py-1 rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
                                                             Ativo
@@ -6138,8 +6171,54 @@
         
         async function renderDriversView() {
             try {
-                const drivers = await db.drivers.toArray();
-                const harvestFronts = await db.harvestFronts.toArray();
+                // Fetch data in parallel
+                const [drivers, harvestFronts, systemUsers] = await Promise.all([
+                    db.drivers.toArray(),
+                    db.harvestFronts.toArray(),
+                    db.users.toArray()
+                ]);
+                
+                // Combine physical drivers and system users with 'driver' role
+                const combinedDriversMap = new Map();
+                
+                // Add physical drivers first
+                drivers.forEach(d => {
+                    combinedDriversMap.set(d.name.toLowerCase(), {
+                        id: d.id,
+                        name: d.name,
+                        phone: d.phone,
+                        license: d.license,
+                        experience: d.experience,
+                        vehicleType: d.vehicleType,
+                        vehiclePlate: d.vehiclePlate,
+                        status: d.status,
+                        assignedFront: d.assignedFront,
+                        type: 'resource'
+                    });
+                });
+                
+                // Add system users with driver role if not already present
+                systemUsers.forEach(u => {
+                    if (u.role === 'driver' && u.name) {
+                        const key = u.name.toLowerCase();
+                        if (!combinedDriversMap.has(key)) {
+                            combinedDriversMap.set(key, {
+                                id: u.id,
+                                name: u.name,
+                                phone: u.email || 'N/A',
+                                license: u.cnh || 'N/A',
+                                experience: 'Usuário do Sistema',
+                                vehicleType: 'N/A',
+                                vehiclePlate: 'N/A',
+                                status: 'active',
+                                assignedFront: null,
+                                type: 'user'
+                            });
+                        }
+                    }
+                });
+                
+                const allDrivers = Array.from(combinedDriversMap.values());
                 
                 const appView = document.getElementById('app-view');
                 appView.innerHTML = `
@@ -6187,7 +6266,7 @@
                         </div>
                         
                         <!-- Drivers List -->
-                        ${drivers.length > 0 ? `
+                        ${allDrivers.length > 0 ? `
                             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden mb-6">
                                 <div class="overflow-x-auto">
                                     <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
@@ -6214,8 +6293,9 @@
                                             </tr>
                                         </thead>
                                         <tbody id="driversTableBody" class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                                            ${drivers.map((driver, index) => {
+                                            ${allDrivers.map((driver, index) => {
                                                 const front = harvestFronts.find(f => f.id === driver.assignedFront);
+                                                const isSystemUser = driver.type === 'user';
                                                 
                                                 return `
                                                     <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors stagger-item" 
@@ -6230,14 +6310,14 @@
                                                                     <i class="fas fa-user"></i>
                                                                 </div>
                                                                 <div>
-                                                                    <div class="font-medium">${driver.name}</div>
+                                                                    <div class="font-medium">${driver.name} ${isSystemUser ? '<span class="text-[10px] bg-blue-100 text-blue-700 px-1 rounded ml-1">USUÁRIO</span>' : ''}</div>
                                                                     <div class="text-sm text-gray-500 dark:text-gray-400">${driver.experience || 'Experiência não informada'}</div>
                                                                 </div>
                                                             </div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="text-sm">${driver.phone || 'N/A'}</div>
-                                                            <div class="text-sm text-gray-500 dark:text-gray-400">CNH: ${driver.license || 'N/A'}</div>
+                                                            <div class="text-sm text-gray-500 dark:text-gray-400">CNH/Email: ${driver.license || 'N/A'}</div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             ${front ? `
@@ -6245,7 +6325,7 @@
                                                                     <div class="w-2 h-2 rounded-full mr-2" style="background-color: ${front.color}"></div>
                                                                     <span>${front.name}</span>
                                                                 </div>
-                                                            ` : 'Nenhuma frente atribuída'}
+                                                            ` : (isSystemUser ? '<span class="text-gray-400 italic text-xs">Aguardando atribuição</span>' : 'Nenhuma frente atribuída')}
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="text-sm">${driver.vehicleType || 'N/A'}</div>
@@ -6258,15 +6338,19 @@
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                             <div class="flex justify-end space-x-2">
-                                                                <button onclick="editDriver(${driver.id})" class="text-primary-500 hover:text-primary-600 p-1" aria-label="Editar">
-                                                                    <i class="fas fa-pencil-alt"></i>
-                                                                </button>
-                                                                <button onclick="toggleDriverStatus(${driver.id}, '${driver.status === 'active' ? 'inactive' : 'active'}')" class="text-blue-500 hover:text-blue-600 p-1" aria-label="${driver.status === 'active' ? 'Desativar' : 'Ativar'}">
-                                                                    <i class="fas fa-${driver.status === 'active' ? 'pause' : 'play'}"></i>
-                                                                </button>
-                                                                <button onclick="deleteDriver(${driver.id})" class="text-red-500 hover:text-red-600 p-1" aria-label="Excluir">
-                                                                    <i class="fas fa-trash"></i>
-                                                                </button>
+                                                                ${!isSystemUser ? `
+                                                                    <button onclick="editDriver(${driver.id})" class="text-primary-500 hover:text-primary-600 p-1" aria-label="Editar">
+                                                                        <i class="fas fa-pencil-alt"></i>
+                                                                    </button>
+                                                                    <button onclick="toggleDriverStatus(${driver.id}, '${driver.status === 'active' ? 'inactive' : 'active'}')" class="text-blue-500 hover:text-blue-600 p-1" aria-label="${driver.status === 'active' ? 'Desativar' : 'Ativar'}">
+                                                                        <i class="fas fa-${driver.status === 'active' ? 'pause' : 'play'}"></i>
+                                                                    </button>
+                                                                    <button onclick="deleteDriver(${driver.id})" class="text-red-500 hover:text-red-600 p-1" aria-label="Excluir">
+                                                                        <i class="fas fa-trash"></i>
+                                                                    </button>
+                                                                ` : `
+                                                                    <span class="text-gray-400 text-xs italic">Gerenciado pelo perfil</span>
+                                                                `}
                                                             </div>
                                                         </td>
                                                     </tr>
@@ -6302,7 +6386,7 @@
                         `}
                         
                         <!-- Driver Statistics -->
-                        ${drivers.length > 0 ? `
+                        ${allDrivers.length > 0 ? `
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                                 <div class="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
                                     <h3 class="font-medium mb-2">Status dos Motoristas</h3>
@@ -6310,19 +6394,19 @@
                                         <div>
                                             <div class="flex justify-between text-sm text-gray-600 dark:text-gray-300 mb-1">
                                                 <span>Ativos</span>
-                                                <span>${drivers.filter(d => d.status === 'active').length}/${drivers.length}</span>
+                                                <span>${allDrivers.filter(d => d.status === 'active').length}/${allDrivers.length}</span>
                                             </div>
                                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                                                <div class="bg-green-500 h-2 rounded-full" style="width: ${(drivers.filter(d => d.status === 'active').length / Math.max(drivers.length, 1)) * 100}%"></div>
+                                                <div class="bg-green-500 h-2 rounded-full" style="width: ${(allDrivers.filter(d => d.status === 'active').length / Math.max(allDrivers.length, 1)) * 100}%"></div>
                                             </div>
                                         </div>
                                         <div>
                                             <div class="flex justify-between text-sm text-gray-600 dark:text-gray-300 mb-1">
                                                 <span>Atribuídos a Frentes</span>
-                                                <span>${drivers.filter(d => d.assignedFront).length}/${drivers.length}</span>
+                                                <span>${allDrivers.filter(d => d.assignedFront).length}/${allDrivers.length}</span>
                                             </div>
                                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                                                <div class="bg-blue-500 h-2 rounded-full" style="width: ${(drivers.filter(d => d.assignedFront).length / Math.max(drivers.length, 1)) * 100}%"></div>
+                                                <div class="bg-blue-500 h-2 rounded-full" style="width: ${(allDrivers.filter(d => d.assignedFront).length / Math.max(allDrivers.length, 1)) * 100}%"></div>
                                             </div>
                                         </div>
                                     </div>
@@ -6332,8 +6416,8 @@
                                     <h3 class="font-medium mb-2">Distribuição por Frentes</h3>
                                     <div class="space-y-2">
                                         ${harvestFronts.map(front => {
-                                            const count = drivers.filter(d => d.assignedFront === front.id).length;
-                                            const percentage = (count / Math.max(drivers.length, 1)) * 100;
+                                            const count = allDrivers.filter(d => d.assignedFront === front.id).length;
+                                            const percentage = (count / Math.max(allDrivers.length, 1)) * 100;
                                             
                                             return `
                                                 <div>
@@ -6352,8 +6436,8 @@
                                         }).join('')}
                                         
                                         ${(() => {
-                                            const unassignedCount = drivers.filter(d => !d.assignedFront).length;
-                                            const percentage = (unassignedCount / Math.max(drivers.length, 1)) * 100;
+                                            const unassignedCount = allDrivers.filter(d => !d.assignedFront).length;
+                                            const percentage = (unassignedCount / Math.max(allDrivers.length, 1)) * 100;
                                             
                                             return `
                                                 <div>
@@ -9871,20 +9955,14 @@
             `;
             
             try {
-                console.log('Carregando usuários...');
-                const { data: users, error } = await supabaseClient
-                    .from('users')
-                    .select('*');
-                
-                if (error) throw error;
-                
-                console.log('Usuários encontrados:', users.length);
+                // Use local data first for speed
+                const users = await db.users.toArray();
                 
                 const tbody = document.getElementById('users-table-body');
                 tbody.innerHTML = '';
                 
                 if (!users || users.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-4 text-center">Nenhum usuário encontrado no banco de dados.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-4 text-center">Nenhum usuário encontrado no banco de dados local.</td></tr>';
                     return;
                 }
                 
