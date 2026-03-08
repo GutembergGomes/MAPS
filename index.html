@@ -632,7 +632,7 @@
             // Check if running via file:// protocol
             if (window.location.protocol === 'file:') {
                 const msg = 'ALERTA: O sistema foi aberto diretamente como arquivo (file://). ' +
-                           'Recursos como Login Google, Service Worker e Manifest NÃO funcionarão corretamente. ' +
+                           'Recursos como Service Worker e Manifest NÃO funcionarão corretamente. ' +
                            'Por favor, use um servidor local (ex: Live Server ou npx serve).';
                 console.error(msg);
                 showToast(msg, 'error');
@@ -785,9 +785,12 @@
                         const lastSyncSetting = await db.settings.get(lastSyncKey);
                         const lastSyncTime = lastSyncSetting ? lastSyncSetting.value : '1970-01-01T00:00:00Z';
                         
+                        // Determinar a coluna de timestamp para esta tabela (users usa created_at)
+                        const timestampColumn = dexieTableName === 'users' ? 'created_at' : 'updated_at';
+                        
                         let query = supabaseClient.from(supabaseTableName).select('*');
                         if (lastSyncSetting) {
-                            query = query.gt('updated_at', lastSyncTime);
+                            query = query.gt(timestampColumn, lastSyncTime);
                         }
                         
                         const { data: deltas, error: deltaError } = await query.limit(1000);
@@ -801,9 +804,9 @@
                             const camelDeltas = validDeltas.map(item => snakeToCamel(item));
                             await db[dexieTableName].bulkPut(camelDeltas);
                             
-                            const maxUpdatedAt = deltas.reduce((max, item) => 
-                                item.updated_at > max ? item.updated_at : max, lastSyncTime);
-                            await db.settings.put({ key: lastSyncKey, value: maxUpdatedAt });
+                            const maxTimestamp = deltas.reduce((max, item) => 
+                                item[timestampColumn] > max ? item[timestampColumn] : max, lastSyncTime);
+                            await db.settings.put({ key: lastSyncKey, value: maxTimestamp });
                             totalUpdated += validDeltas.length;
                         }
 
@@ -1504,40 +1507,6 @@
             }
         }
         
-        async function handleGoogleLogin(forcePopup = false) {
-            try {
-                showLoading('Conectando com Google (Supabase)...');
-                appLog(`Login Google via Supabase...`);
-                
-                // Determinando o URL de redirecionamento correto
-                // Se estiver no browser local (file://), o OAuth NÃO funcionará
-                let redirectTo = window.location.origin;
-                
-                if (!redirectTo || redirectTo === 'null' || redirectTo.startsWith('file://')) {
-                    // Fallback para localhost caso esteja testando localmente, mas
-                    // o usuário PRECISA rodar um servidor (ex: Live Server) para funcionar.
-                    redirectTo = 'http://localhost:5500'; // Porta padrão do Live Server
-                    console.warn('OAuth não funciona com protocolo file://. Use um servidor local (ex: Live Server).');
-                }
-
-                const { data, error } = await supabaseClient.auth.signInWithOAuth({
-                    provider: 'google',
-                    options: {
-                        redirectTo: redirectTo
-                    }
-                });
-                
-                if (error) throw error;
-                
-            } catch (error) {
-                console.error('Google Auth error:', error);
-                appLog(`ERRO: ${error.message}`, true);
-                showToast(error.message, 'error');
-            } finally {
-                hideLoading();
-            }
-        }
-        
         function logout() {
             supabaseClient.auth.signOut().then(() => {
                 showToast('Desconectado.', 'info');
@@ -1701,6 +1670,12 @@
         }
         
         function setupServiceWorker() {
+            // Service Workers are NOT supported on file:// protocol (local files)
+            if (window.location.protocol === 'file:') {
+                console.warn('Service Worker não suportado no protocolo file://. Use um servidor local para testar recursos offline.');
+                return;
+            }
+
             if ('serviceWorker' in navigator) {
                 // Use explicit path relative to the HTML file
                 navigator.serviceWorker.register('./sw.js')
@@ -2188,29 +2163,6 @@
                                 </button>
                             </div>
                         </form>
-                        
-                        <div class="mt-6">
-                            <div class="relative">
-                                <div class="absolute inset-0 flex items-center">
-                                    <div class="w-full border-t border-gray-300 dark:border-gray-600"></div>
-                                </div>
-                                <div class="relative flex justify-center text-sm">
-                                    <span class="px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">Ou continue com</span>
-                                </div>
-                            </div>
-
-                            <div class="mt-6">
-                                <button onclick="handleGoogleLogin()" type="button" class="w-full flex justify-center items-center py-2 px-4 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200">
-                                    <img class="h-5 w-5 mr-2" src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google">
-                                    <span>Google</span>
-                                </button>
-                                <div id="google-fallback-container" class="mt-3 text-center">
-                                    <button onclick="handleGoogleLogin(true)" type="button" class="text-xs text-primary-500 hover:text-primary-600 underline">
-                                        Não consegue logar? Tente o método alternativo
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
                         
                         <div id="login-error" class="hidden mt-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
                             <span class="block sm:inline" id="login-error-message"></span>
