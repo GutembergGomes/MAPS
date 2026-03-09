@@ -1453,7 +1453,11 @@
             autoFollow: true,
             isFirstUpdate: true,
             offRouteCounter: 0, // Contador para detecção de desvio
-            lastRecalculationTime: 0 // Evitar recálculos seguidos
+            lastRecalculationTime: 0, // Evitar recálculos seguidos
+            instructions: [], // Instruções de navegação (passo a passo)
+            currentInstructionIndex: 0, // Índice da próxima instrução
+            lastSpokenInstructionIndex: -1, // Última instrução falada para evitar repetição
+            voiceEnabled: true // Habilitar/desabilitar voz
         };
         
         // Initialize database with sample data if empty
@@ -1496,48 +1500,92 @@
                     
                     if (user) {
                         try {
-                            // Get user profile from 'users' table
-                            const { data: profile, error } = await supabaseClient
-                                .from('users')
-                                .select('*')
-                                .eq('id', user.id)
-                                .single();
-                            
+                            let profile = null;
                             let role = null;
                             let displayName = user.email || 'Usuário';
                             let needsRoleSelection = false;
+
+                            // 1. Tentar buscar perfil do Supabase (Online)
+                            if (navigator.onLine) {
+                                try {
+                                    const { data, error } = await supabaseClient
+                                        .from('users')
+                                        .select('*')
+                                        .eq('id', user.id)
+                                        .single();
+                                    
+                                    if (!error && data) {
+                                        profile = data;
+                                        // Cachear perfil no Dexie para uso offline
+                                        await db.users.put(snakeToCamel(profile));
+                                    }
+                                } catch (e) {
+                                    console.warn('Erro ao buscar perfil online:', e);
+                                }
+                            }
+
+                            // 2. Fallback: Buscar do Dexie (Offline ou erro)
+                            if (!profile) {
+                                console.log('Buscando perfil localmente (Offline)...');
+                                try {
+                                    const localUser = await db.users.get(user.id);
+                                    if (localUser) {
+                                        profile = localUser; // Já está em CamelCase se veio do Dexie
+                                        // Converter para SnakeCase se necessário para lógica abaixo ou adaptar lógica
+                                        // Vamos manter consistência: lógica abaixo espera snake_case do Supabase?
+                                        // O código original usava `profile.role`, `profile.name`.
+                                        // Dexie salva em camelCase (`role`, `name`, `profileCompleted`).
+                                        // Supabase retorna snake_case (`role`, `name`, `profile_completed`).
+                                        // Precisamos normalizar.
+                                    }
+                                } catch (e) {
+                                    console.error('Erro ao buscar perfil local:', e);
+                                }
+                            }
                             
                             // FORCE ADMIN FOR SPECIFIC EMAIL
                             const emailCheck = (user.email || '').toLowerCase().trim();
                             if (emailCheck === 'gutemberggg10@gmail.com') {
                                 console.log('SUPER ADMIN DETECTED:', emailCheck);
                                 role = 'admin';
-                                // Sync admin role to DB
-                                await supabaseClient.from('users').upsert({ id: user.id, role: 'admin', email: emailCheck });
+                                // Sync admin role to DB only if online
+                                if (navigator.onLine) {
+                                    await supabaseClient.from('users').upsert({ id: user.id, role: 'admin', email: emailCheck });
+                                }
                             }
                             
                             if (profile) {
-                                const hasRole = !!profile.role;
-                                const hasProfile = !!(profile.name && profile.matricula && profile.usina);
+                                // Normalizar acesso a propriedades (camelCase vs snake_case)
+                                const userRole = profile.role;
+                                const userName = profile.name;
+                                const userMatricula = profile.matricula;
+                                const userUsina = profile.usina;
+                                // Dexie: profileCompleted, Supabase: profile_completed
+                                const isProfileCompleted = profile.profileCompleted !== undefined ? profile.profileCompleted : profile.profile_completed;
+                                
+                                const hasRole = !!userRole;
+                                const hasProfile = !!(userName && userMatricula && userUsina);
                                 
                                 if (hasRole && !role) {
-                                    role = profile.role;
+                                    role = userRole;
                                 }
                                 
-                                if ((!hasRole && !role) || !hasProfile || profile.profile_completed === false) {
+                                if ((!hasRole && !role) || !hasProfile || isProfileCompleted === false) {
                                     needsRoleSelection = true;
                                 }
                                 
                                 if (role === 'admin') needsRoleSelection = false;
-                                if (profile.name) displayName = profile.name;
-                            } else {
-                                // Create initial profile
-                                await supabaseClient.from('users').insert({
-                                    id: user.id,
-                                    email: user.email,
-                                    created_at: new Date().toISOString()
-                                });
-                                needsRoleSelection = true;
+                                if (userName) displayName = userName;
+                            } else if (navigator.onLine) {
+                                // Create initial profile only if online
+                                try {
+                                    await supabaseClient.from('users').insert({
+                                        id: user.id,
+                                        email: user.email,
+                                        created_at: new Date().toISOString()
+                                    });
+                                    needsRoleSelection = true;
+                                } catch (e) { console.error("Erro ao criar perfil inicial:", e); }
                             }
                             
                             AppState.currentUser = {
@@ -1700,6 +1748,55 @@
             return path;
         }
         
+        // Monitoramento de Status Online/Offline
+        function setupOnlineStatusMonitoring() {
+            const updateStatus = () => {
+                const isOnline = navigator.onLine;
+                const body = document.body;
+                
+                // Elemento de indicador offline
+                let offlineIndicator = document.getElementById('offline-indicator');
+                if (!offlineIndicator) {
+                    offlineIndicator = document.createElement('div');
+                    offlineIndicator.id = 'offline-indicator';
+                    offlineIndicator.className = 'fixed top-0 left-0 right-0 bg-red-500 text-white text-center py-1 text-xs font-bold z-50 hidden transition-transform duration-300 transform -translate-y-full';
+                    offlineIndicator.innerHTML = '<i class="fas fa-wifi-slash mr-1"></i> MODO OFFLINE - Alterações serão salvas localmente';
+                    document.body.appendChild(offlineIndicator);
+                }
+                
+                if (isOnline) {
+                    offlineIndicator.classList.add('hidden');
+                    offlineIndicator.classList.add('-translate-y-full');
+                    if (body.classList.contains('offline-mode')) {
+                        body.classList.remove('offline-mode');
+                        showToast('Conexão restaurada! Sincronizando...', 'success');
+                        // Tentar sincronizar automaticamente ao voltar online
+                        setTimeout(() => {
+                            processSyncQueue();
+                            syncAllFromSupabase();
+                        }, 2000);
+                    }
+                } else {
+                    offlineIndicator.classList.remove('hidden');
+                    // Pequeno delay para animação
+                    setTimeout(() => {
+                        offlineIndicator.classList.remove('-translate-y-full');
+                    }, 100);
+                    
+                    if (!body.classList.contains('offline-mode')) {
+                        body.classList.add('offline-mode');
+                        showToast('Você está offline. O app continuará funcionando.', 'warning');
+                    }
+                }
+            };
+            
+            window.addEventListener('online', updateStatus);
+            window.addEventListener('offline', updateStatus);
+            
+            // Verificar estado inicial
+            updateStatus();
+        }
+
         // Initialize the app
         document.addEventListener('DOMContentLoaded', function() {
             // Helper function for debug logging
@@ -1717,6 +1814,10 @@
             };
             
             appLog('App inicializando...');
+            
+            // Setup online/offline monitoring immediately
+            setupOnlineStatusMonitoring();
+            
             initializeSupabase();
             
             // Check and set initial online status
@@ -2015,18 +2116,34 @@
                     return;
                 }
                 
-                const { error } = await supabaseClient.from('users').upsert({
+                const userData = {
                     id: user.id,
                     role: role,
                     name: name,
                     matricula: matricula,
                     cnh: cnh || null,
                     usina: usina,
-                    profile_completed: true,
-                    email: user.email
-                });
+                    profileCompleted: true, // CamelCase for Dexie
+                    email: user.email,
+                    createdAt: new Date().toISOString()
+                };
+
+                // 1. Salvar no Dexie (Offline First)
+                await db.users.put(userData);
+
+                // 2. Adicionar à fila de sync para garantir envio ao Supabase
+                const syncData = { ...userData };
+                // Converter para snake_case para o Supabase
+                syncData.profile_completed = true;
+                delete syncData.profileCompleted;
+                delete syncData.createdAt; // Supabase usa created_at, mas geralmente é readonly ou default
                 
-                if (error) throw error;
+                await addToSyncQueue('users', 'update', user.id, syncData);
+                
+                // 3. Tentar enviar imediatamente se online (via processSyncQueue)
+                if (navigator.onLine) {
+                    processSyncQueue();
+                }
                 
                 AppState.currentUser = AppState.currentUser || {};
                 AppState.currentUser.role = role;
@@ -2055,6 +2172,24 @@
             } catch (error) {
                 console.error('Erro ao salvar perfil do usuário:', error);
                 showToast('Erro ao salvar perfil. Tente novamente.', 'error');
+            }
+        }
+
+        async function refreshDashboard() {
+            if (navigator.onLine) {
+                showToast('Sincronizando dados...', 'info');
+                try {
+                    await processSyncQueue();
+                    await syncAllFromSupabase();
+                    renderDashboardView();
+                    showToast('Dashboard atualizado!', 'success');
+                } catch (e) {
+                    console.error("Erro ao atualizar dashboard:", e);
+                    showToast('Erro ao sincronizar. Verifique sua conexão.', 'error');
+                }
+            } else {
+                showToast('Você está offline. Exibindo dados locais.', 'warning');
+                renderDashboardView();
             }
         }
         
@@ -5533,9 +5668,12 @@
                                 <span class="status-badge ${getStatusClass(route.status)} mr-2">
                                     ${getStatusText(route.status)}
                                 </span>
-                                <div id="gps-signal-indicator" class="text-xs px-2 py-1 rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                                <div id="gps-signal-indicator" class="text-xs px-2 py-1 rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 mr-2">
                                     <i class="fas fa-satellite-dish mr-1"></i> GPS: <span id="gps-accuracy-value">--</span>
                                 </div>
+                                <button onclick="toggleVoiceNavigation()" id="voice-toggle-btn" class="p-2 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 focus:outline-none" title="Ativar/Desativar Voz">
+                                    <i class="fas fa-volume-up"></i>
+                                </button>
                             </div>
                         </div>
                         
@@ -5766,6 +5904,109 @@
             });
         }
         
+        function toggleVoiceNavigation() {
+            navigationState.voiceEnabled = !navigationState.voiceEnabled;
+            const btn = document.getElementById('voice-toggle-btn');
+            if (btn) {
+                if (navigationState.voiceEnabled) {
+                    btn.innerHTML = '<i class="fas fa-volume-up"></i>';
+                    btn.classList.remove('text-red-500');
+                    showToast('Orientação por voz ativada', 'info');
+                    speakInstruction("Orientação por voz ativada");
+                } else {
+                    btn.innerHTML = '<i class="fas fa-volume-mute"></i>';
+                    btn.classList.add('text-red-500');
+                    showToast('Orientação por voz desativada', 'info');
+                    window.speechSynthesis.cancel();
+                }
+            }
+        }
+
+        function speakInstruction(text) {
+            if (!navigationState.voiceEnabled || !text) return;
+            
+            // Cancelar falas anteriores para não acumular
+            window.speechSynthesis.cancel();
+            
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'pt-BR';
+            utterance.rate = 1.1; 
+            
+            window.speechSynthesis.speak(utterance);
+        }
+
+        async function fetchRouteInstructions(startLat, startLng, endLat, endLng) {
+            if (!navigator.onLine) return;
+            
+            const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?steps=true&overview=false&language=pt`;
+            
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.routes && data.routes.length > 0) {
+                    navigationState.instructions = data.routes[0].legs[0].steps;
+                    // Começamos do índice 1 porque o 0 é o ponto de partida (depart)
+                    navigationState.currentInstructionIndex = 1; 
+                    console.log("Instruções de navegação carregadas:", navigationState.instructions.length);
+                    
+                    // Falar a primeira instrução (saída)
+                    if (navigationState.instructions.length > 0) {
+                        const firstStep = navigationState.instructions[0];
+                        speakInstruction(`Iniciando rota. ${firstStep.maneuver.instruction}`);
+                    }
+                }
+            } catch (e) {
+                console.error("Erro ao buscar instruções de voz:", e);
+            }
+        }
+
+        function checkVoiceInstructions(lat, lng, speed) {
+            if (!navigationState.voiceEnabled || 
+                !navigationState.instructions || 
+                navigationState.currentInstructionIndex >= navigationState.instructions.length) return;
+            
+            const step = navigationState.instructions[navigationState.currentInstructionIndex];
+            
+            if (!step || !step.maneuver) return;
+            
+            const maneuverLat = step.maneuver.location[1];
+            const maneuverLng = step.maneuver.location[0];
+            const dist = haversineDistance(lat, lng, maneuverLat, maneuverLng) * 1000; // metros
+            
+            // Lógica de avisos
+            const key = `${navigationState.currentInstructionIndex}`;
+            
+            // Aviso antecipado (200m a 150m) se velocidade > 30km/h
+            if (dist < 200 && dist > 150 && speed > 30) {
+                 const preKey = `${key}-pre`;
+                 if (navigationState.lastPreAlert !== preKey) {
+                     speakInstruction(`Em 200 metros, ${step.maneuver.instruction}`);
+                     navigationState.lastPreAlert = preKey;
+                 }
+            }
+            
+            // Aviso de execução (50m)
+            if (dist < 50) {
+                 if (navigationState.lastSpokenInstructionIndex !== navigationState.currentInstructionIndex) {
+                     speakInstruction(step.maneuver.instruction);
+                     navigationState.lastSpokenInstructionIndex = navigationState.currentInstructionIndex;
+                     
+                     // Preparar para o próximo passo após passar o ponto (delay simples ou esperar distância aumentar)
+                     // Simplificação: assumir que passou após 10s ou se a distância aumentar (complexo)
+                     // Vamos apenas incrementar o índice. Se o usuário estiver parado, vai pular?
+                     // Melhor: incrementar apenas se estiver muito perto (< 20m)
+                 }
+            }
+            
+            // Troca de passo: se chegou muito perto (< 20m)
+            if (dist < 20) {
+                navigationState.currentInstructionIndex++;
+                // Resetar alerta prévio
+                navigationState.lastPreAlert = null;
+            }
+        }
+
         async function startNavigation() {
             if (!navigationState.route || !navigationState.map) {
                 showToast('Erro: Rota não disponível para navegação', 'error');
@@ -5800,13 +6041,20 @@
                             showLoading('Recalculando rota da sua posição atual...');
                             
                             const destination = navigationState.route.path[navigationState.route.path.length - 1];
-                            const url = `https://router.project-osrm.org/route/v1/driving/${userLng},${userLat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+                            const url = `https://router.project-osrm.org/route/v1/driving/${userLng},${userLat};${destination.lng},${destination.lat}?overview=full&geometries=geojson&steps=true&language=pt`;
                             
                             try {
                                 const response = await fetch(url);
                                 const data = await response.json();
                                 
                                 if (data.routes && data.routes.length > 0) {
+                                    // Salvar instruções se disponíveis
+                                    if (data.routes[0].legs && data.routes[0].legs[0].steps) {
+                                        navigationState.instructions = data.routes[0].legs[0].steps;
+                                        navigationState.currentInstructionIndex = 1;
+                                        speakInstruction("Rota recalculada. " + (navigationState.instructions[0]?.maneuver?.instruction || ""));
+                                    }
+
                                     const newPath = data.routes[0].geometry.coordinates.map(c => ({
                                         lat: c[1],
                                         lng: c[0],
@@ -5846,19 +6094,42 @@
                     }
                     hideLoading();
                 }
+
+                // Se não temos instruções ainda (não recalculou ou erro), tentar buscar agora
+                if ((!navigationState.instructions || navigationState.instructions.length === 0) && navigator.onLine) {
+                    const start = navigationState.route.path[0];
+                    const end = navigationState.route.path[navigationState.route.path.length - 1];
+                    // Não aguardar (async) para não travar a UI
+                    fetchRouteInstructions(start.lat, start.lng, end.lat, end.lng);
+                } else if (!navigator.onLine && (!navigationState.instructions || navigationState.instructions.length === 0)) {
+                    speakInstruction("Navegação iniciada offline. Siga a linha no mapa.");
+                }
                 
+                // Habilitar áudio (User Gesture Unlock)
+                if (window.speechSynthesis) {
+                    window.speechSynthesis.cancel();
+                    const u = new SpeechSynthesisUtterance("Iniciando navegação");
+                    u.lang = 'pt-BR';
+                    u.volume = 1;
+                    window.speechSynthesis.speak(u);
+                }
+
                 // Set navigation as active
                 navigationState.active = true;
                 navigationState.navigationStartTime = new Date();
                 navigationState.isFirstUpdate = true; // Reset first update flag
+                navigationState.currentInstructionIndex = 0;
+                navigationState.lastSpokenInstructionIndex = -1;
                 
                 // Animação inicial estilo Google Maps: aproxima do ponto inicial
                 const startPoint = [navigationState.route.path[0].lat, navigationState.route.path[0].lng];
-                navigationState.map.flyTo(startPoint, 17, {
-                    animate: true,
-                    duration: 2.0,
-                    easeLinearity: 0.25
-                });
+                if (navigationState.map) {
+                    navigationState.map.flyTo(startPoint, 17, {
+                        animate: true,
+                        duration: 2.0,
+                        easeLinearity: 0.25
+                    });
+                }
                 
                 // Start tracking location
                 if (navigator.geolocation) {
@@ -5872,7 +6143,10 @@
                     // Start watching position
                     navigationState.watchId = navigator.geolocation.watchPosition(
                         updateNavigation,
-                        handleNavigationError,
+                        (err) => {
+                            console.error("Erro de GPS:", err);
+                            handleNavigationError(err);
+                        },
                         options
                     );
                     
@@ -5913,6 +6187,9 @@
                 const accuracy = position.coords.accuracy;
                 const speed = position.coords.speed ? position.coords.speed * 3.6 : 0; // Convert m/s to km/h
                 const heading = position.coords.heading || 0;
+                
+                // Verificar instruções de voz
+                checkVoiceInstructions(lat, lng, speed);
                 
                 // Update GPS signal indicator
                 const gpsAccuracyElement = document.getElementById('gps-accuracy-value');
@@ -8589,7 +8866,15 @@
 
         function initMapWithLayers(mapId, center, zoom) {
             const map = L.map(mapId).setView(center, zoom);
-            baseLayers["Mapa Padrão"].addTo(map);
+            
+            // Adicionar Esri Satellite como padrão
+            if (baseLayers["Satélite (Esri)"]) {
+                baseLayers["Satélite (Esri)"].addTo(map);
+            } else {
+                // Fallback para mapa padrão se Esri não existir
+                baseLayers["Mapa Padrão"].addTo(map);
+            }
+            
             L.control.layers(baseLayers).addTo(map);
             return map;
         }
