@@ -848,6 +848,70 @@
             return 'Sem nome';
         }
 
+        function updateCurrentUserFromProfile(profile) {
+            try {
+                if (!profile || !AppState.currentUser) return;
+                
+                const currentId = AppState.currentUser.id;
+                if (currentId && profile.id && String(profile.id) !== String(currentId)) return;
+                
+                const nextRole = normalizeRole(profile.role || AppState.currentUser.role);
+                const nextName = (profile.name && String(profile.name).trim()) ? String(profile.name).trim() : AppState.currentUser.name;
+                
+                const roleChanged = nextRole && nextRole !== AppState.currentUser.role;
+                const nameChanged = nextName && nextName !== AppState.currentUser.name;
+                
+                if (roleChanged || nameChanged) {
+                    AppState.currentUser.role = nextRole || AppState.currentUser.role;
+                    AppState.currentUser.name = nextName || AppState.currentUser.name;
+                    updateUserHeader();
+                    applyRolePermissions();
+                    showToast('Seu perfil foi atualizado', 'info');
+                    
+                    if (navigationState?.active && !isDriverRole(AppState.currentUser.role)) {
+                        stopNavigation();
+                    }
+                    
+                    const shouldBeDriver = isDriverRole(AppState.currentUser.role);
+                    const currentView = AppState.currentView;
+                    
+                    if (shouldBeDriver && currentView !== 'driver') {
+                        showView('driver', { replace: true });
+                    }
+                    if (!shouldBeDriver && currentView === 'driver') {
+                        showView('dashboard', { replace: true });
+                    }
+                }
+            } catch (e) {}
+        }
+
+        async function syncCurrentUserProfileFromSupabase() {
+            try {
+                if (!navigator.onLine) return;
+                if (!supabaseClient) return;
+                const { data: { session } } = await getSessionSafe();
+                if (!session) return;
+                
+                const { data, error } = await enqueueSupabaseAuth(() => supabaseClient
+                    .from('users')
+                    .select('*')
+                    .eq('id', session.user.id)
+                    .single());
+                
+                if (error || !data) return;
+                
+                const c = snakeToCamel(data);
+                c.profile_completed = data.profile_completed;
+                c.profileCompleted = data.profile_completed;
+                
+                try {
+                    await db.users.put(c);
+                } catch (e) {}
+                
+                updateCurrentUserFromProfile(c);
+            } catch (e) {}
+        }
+
         let __supabaseAuthQueue = Promise.resolve();
         
         function enqueueSupabaseAuth(fn) {
@@ -930,10 +994,15 @@
                         const lastSyncTime = lastSyncSetting ? lastSyncSetting.value : '1970-01-01T00:00:00Z';
                         
                         if (dexieTableName === 'users') {
-                            const { data: allUsers, error: allUsersError } = await supabaseClient
-                                .from('users')
-                                .select('*')
-                                .limit(1000);
+                            const currentRole = AppState.currentUser?.role || null;
+                            let query = supabaseClient.from('users').select('*');
+                            if (!(currentRole === 'admin' || currentRole === 'leader')) {
+                                query = query.eq('id', session.user.id).limit(1);
+                            } else {
+                                query = query.limit(1000);
+                            }
+                            
+                            const { data: allUsers, error: allUsersError } = await query;
                             if (allUsersError) throw allUsersError;
                             
                             const camelUsers = (allUsers || []).map(item => {
@@ -943,6 +1012,11 @@
                                 return c;
                             });
                             await db.users.bulkPut(camelUsers);
+                            try {
+                                const me = camelUsers.find(u => String(u.id) === String(session.user.id));
+                                if (me) updateCurrentUserFromProfile(me);
+                            } catch (e) {}
+                            
                             await db.settings.put({ key: lastSyncKey, value: new Date().toISOString() });
                             totalUpdated += camelUsers.length;
                             updatedCount = camelUsers.length;
@@ -1329,6 +1403,9 @@
                             try {
                                 await db[dexieTableName].put(data);
                                 console.log(`Updated local ${dexieTableName}/${id} from Supabase`);
+                                if (dexieTableName === 'users') {
+                                    updateCurrentUserFromProfile(data);
+                                }
                             } catch (e) {
                                 console.error(`Error updating local DB from Supabase:`, e);
                             }
@@ -2049,6 +2126,7 @@
                             
                             if (!role) role = 'driver';
                             AppState.currentUser = {
+                                id: user.id,
                                 name: displayName,
                                 email: user.email || null,
                                 role: role
@@ -2073,6 +2151,19 @@
                             processSyncQueue();
                             if (window.syncInterval) clearInterval(window.syncInterval);
                             window.syncInterval = setInterval(processSyncQueue, 30000);
+                            
+                            try {
+                                if (window.profileSyncInterval) clearInterval(window.profileSyncInterval);
+                                window.profileSyncInterval = setInterval(syncCurrentUserProfileFromSupabase, 20000);
+                                
+                                document.addEventListener('visibilitychange', () => {
+                                    if (!document.hidden) syncCurrentUserProfileFromSupabase();
+                                });
+                                window.addEventListener('focus', () => syncCurrentUserProfileFromSupabase());
+                                window.addEventListener('online', () => syncCurrentUserProfileFromSupabase());
+                                
+                                syncCurrentUserProfileFromSupabase();
+                            } catch (e) {}
                         } catch (e) {
                             console.error('Erro ao carregar perfil do usuário:', e);
                             if (header) header.style.display = 'none';
@@ -2085,6 +2176,7 @@
                         if (nav) nav.style.display = 'none';
                         
                         AppState.currentUser = { name: 'Usuário', email: null, role: 'leader' };
+                        if (window.profileSyncInterval) clearInterval(window.profileSyncInterval);
                         clearActiveNavigationState();
                         renderLoginView();
                     }
