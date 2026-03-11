@@ -1389,6 +1389,7 @@
                 // Only include speed and accuracy if they exist and are significant
                 if (point.speed) roundedPoint.speed = Math.round(point.speed * 10) / 10;
                 if (point.accuracy && point.accuracy > 1) roundedPoint.accuracy = Math.round(point.accuracy);
+                if (point.offRoute !== undefined) roundedPoint.offRoute = !!point.offRoute;
                 
                 // Skip points that are too close together (except first and last point)
                 if (lastPoint && path.indexOf(point) !== path.length - 1) {
@@ -1649,6 +1650,155 @@
         
         function toggleDriverMapFullscreen() {
             setDriverMapFullscreen(!document.body.classList.contains('driver-map-fullscreen'));
+        }
+
+        async function setActiveNavigationState(sessionId, routeId, frontId) {
+            try {
+                await db.settings.put({
+                    key: 'active_navigation',
+                    value: {
+                        sessionId,
+                        routeId,
+                        frontId,
+                        startedAt: new Date().toISOString()
+                    }
+                });
+            } catch (e) {}
+        }
+        
+        async function clearActiveNavigationState() {
+            try {
+                await db.settings.delete('active_navigation');
+            } catch (e) {}
+        }
+        
+        function initActualTrackLayers(map) {
+            if (!map) return;
+            if (navigationState.actualTrackGroup) {
+                try { navigationState.actualTrackGroup.remove(); } catch (e) {}
+            }
+            navigationState.actualTrackGroup = L.featureGroup().addTo(map);
+            navigationState.actualTrackPoints = [];
+            navigationState.actualTrackCurrent = null;
+            navigationState.actualTrackCurrentOffRoute = null;
+            navigationState.lastTrackSaveTime = 0;
+        }
+        
+        function appendTrackPoint(lat, lng, timestamp, speed, accuracy, offRoute) {
+            if (!navigationState.map) return;
+            if (!navigationState.actualTrackGroup) initActualTrackLayers(navigationState.map);
+            
+            const p = { lat, lng, timestamp, speed, accuracy, offRoute: !!offRoute };
+            navigationState.actualTrackPoints.push(p);
+            
+            const shouldNewSegment = navigationState.actualTrackCurrent === null || navigationState.actualTrackCurrentOffRoute !== !!offRoute;
+            if (shouldNewSegment) {
+                const poly = L.polyline([[lat, lng]], {
+                    color: offRoute ? '#ef4444' : '#22c55e',
+                    opacity: 0.9,
+                    weight: 6,
+                    lineJoin: 'round',
+                    lineCap: 'round'
+                });
+                poly.addTo(navigationState.actualTrackGroup);
+                navigationState.actualTrackCurrent = poly;
+                navigationState.actualTrackCurrentOffRoute = !!offRoute;
+            } else {
+                navigationState.actualTrackCurrent.addLatLng([lat, lng]);
+            }
+        }
+        
+        async function persistTrackProgress() {
+            try {
+                const sessionId = navigationState.currentSessionId;
+                if (!sessionId) return;
+                const now = Date.now();
+                if (now - (navigationState.lastTrackSaveTime || 0) < 10000) return;
+                navigationState.lastTrackSaveTime = now;
+                
+                const trackPath = compressPathData(navigationState.actualTrackPoints || []);
+                await db.routeSessions.update(sessionId, { trackPath, updatedAt: new Date().toISOString() });
+            } catch (e) {}
+        }
+        
+        function beginNavigationWatch() {
+            if (!navigator.geolocation) {
+                showToast('Geolocalização não disponível no seu dispositivo', 'error');
+                stopNavigation();
+                return;
+            }
+            
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            };
+            
+            navigationState.watchId = navigator.geolocation.watchPosition(
+                updateNavigation,
+                (err) => {
+                    console.error("Erro de GPS:", err);
+                    handleNavigationError(err);
+                },
+                options
+            );
+            
+            setupLocationErrorHandling((message) => {
+                showToast(message, 'warning');
+            });
+            
+            keepScreenOn(true);
+        }
+        
+        async function tryRestoreActiveNavigationAfterLogin() {
+            try {
+                const saved = await db.settings.get('active_navigation');
+                const value = saved?.value;
+                if (!value?.sessionId || !value?.routeId) return;
+                
+                const session = await db.routeSessions.get(value.sessionId);
+                if (!session || session.status !== 'active' || session.endTime) {
+                    await clearActiveNavigationState();
+                    return;
+                }
+                
+                await showDriverNavigation(value.frontId, value.routeId);
+                
+                const waitUntilMapReady = async () => {
+                    for (let i = 0; i < 40; i++) {
+                        if (navigationState.map && navigationState.route) return true;
+                        await new Promise(r => setTimeout(r, 100));
+                    }
+                    return false;
+                };
+                
+                const ready = await waitUntilMapReady();
+                if (!ready) return;
+                
+                if (session.trackPath) {
+                    const restored = decompressPathData(session.trackPath);
+                    if (Array.isArray(restored) && restored.length > 0) {
+                        initActualTrackLayers(navigationState.map);
+                        restored.forEach(pt => appendTrackPoint(pt.lat, pt.lng, pt.timestamp, pt.speed, pt.accuracy, pt.offRoute));
+                    }
+                } else {
+                    initActualTrackLayers(navigationState.map);
+                }
+                
+                navigationState.currentSessionId = session.id;
+                navigationState.active = true;
+                navigationState.navigationStartTime = session.startTime ? new Date(session.startTime) : new Date();
+                navigationState.isFirstUpdate = true;
+                
+                const startButton = document.getElementById('start-navigation-btn');
+                const stopButton = document.getElementById('stop-navigation-btn');
+                if (startButton) startButton.disabled = true;
+                if (stopButton) stopButton.disabled = false;
+                
+                setDriverMapFullscreen(true);
+                beginNavigationWatch();
+                showToast('Navegação restaurada', 'success');
+            } catch (e) {}
         }
         
         let TTS_STATE = { ready: false, voice: null };
@@ -1915,6 +2065,8 @@
                                 showView('dashboard', { replace: true });
                             }
                             
+                            tryRestoreActiveNavigationAfterLogin();
+                            
                             syncAllFromSupabase().catch(e => console.error('Erro na sincronização inicial:', e));
                             
                             setupSupabaseListeners();
@@ -1933,6 +2085,7 @@
                         if (nav) nav.style.display = 'none';
                         
                         AppState.currentUser = { name: 'Usuário', email: null, role: 'leader' };
+                        clearActiveNavigationState();
                         renderLoginView();
                     }
                 });
@@ -5644,8 +5797,9 @@
                 let routes = await db.routes.toArray();
                 let harvestFronts = await db.harvestFronts.toArray();
                 let drivers = await db.drivers.toArray();
+                const farms = await db.farms.toArray();
                 
-                if ((routes.length === 0 || harvestFronts.length === 0) && navigator.onLine) {
+                if ((routes.length === 0 || harvestFronts.length === 0 || farms.length === 0) && navigator.onLine) {
                     try {
                         const { data: { session } } = await getSessionSafe();
                         if (session) {
@@ -6239,6 +6393,7 @@
                 navigationState.accuracyCircle = accuracyCircle;
                 navigationState.startMarker = startMarker;
                 navigationState.endMarker = endMarker;
+                initActualTrackLayers(map);
                 
                 // Add route markers at important points (every ~1/5 of the route)
                 addRouteWaypoints(map, routePath);
@@ -6531,6 +6686,7 @@
                     await db.routeSessions.put(session);
                     addToSyncQueue('create', 'routeSessions', sessionId, session);
                     navigationState.currentSessionId = sessionId;
+                    await setActiveNavigationState(sessionId, route.id, session.frontId || null);
                 } catch (e) { console.warn('Falha ao iniciar sessão de rota:', e); }
 
                 try {
@@ -6547,6 +6703,8 @@
                 document.getElementById('start-navigation-btn').disabled = true;
                 document.getElementById('stop-navigation-btn').disabled = false;
                 setDriverMapFullscreen(true);
+                setTimeout(() => setDriverMapFullscreen(true), 250);
+                setTimeout(() => setDriverMapFullscreen(true), 900);
                 
                 
                 // --- Recalcular rota se não estiver na Usina Cambuí ---
@@ -6645,6 +6803,7 @@
                 navigationState.isFirstUpdate = true; // Reset first update flag
                 navigationState.currentInstructionIndex = 0;
                 navigationState.lastSpokenInstructionIndex = -1;
+                initActualTrackLayers(navigationState.map);
                 
                 // Animação inicial estilo Google Maps: aproxima do ponto inicial
                 const startPoint = [navigationState.route.path[0].lat, navigationState.route.path[0].lng];
@@ -6656,41 +6815,9 @@
                     });
                 }
                 
-                // Start tracking location
-                if (navigator.geolocation) {
-                    // Set accuracy options
-                    const options = {
-                        enableHighAccuracy: true,
-                        timeout: 10000,
-                        maximumAge: 0
-                    };
-                    
-                    // Start watching position
-                    navigationState.watchId = navigator.geolocation.watchPosition(
-                        updateNavigation,
-                        (err) => {
-                            console.error("Erro de GPS:", err);
-                            handleNavigationError(err);
-                        },
-                        options
-                    );
-                    
-                    // Setup monitoring for location errors
-                    setupLocationErrorHandling((message) => {
-                        showToast(message, 'warning');
-                    });
-                    
-                    showToast('Navegação iniciada!', 'success');
-                    
-                    // Show initial alert
-                    showNavigationAlert('Navegação Iniciada', 'Siga o caminho destacado no mapa para chegar ao destino.');
-                    
-                    // Keep screen on if possible
-                    keepScreenOn(true);
-                } else {
-                    showToast('Geolocalização não disponível no seu dispositivo', 'error');
-                    stopNavigation();
-                }
+                beginNavigationWatch();
+                showToast('Navegação iniciada!', 'success');
+                showNavigationAlert('Navegação Iniciada', 'Siga o caminho destacado no mapa para chegar ao destino.');
             } catch (error) {
                 console.error('Erro ao iniciar navegação:', error);
                 showToast('Erro ao iniciar navegação: ' + error.message, 'error');
@@ -6809,6 +6936,9 @@
                 // Calculate closest point on route
                 const routePath = navigationState.route.path;
                 const closest = findClosestPointOnRoute(routePath, { lat, lng });
+                const isOffRoute = closest.distance > 80;
+                appendTrackPoint(lat, lng, Date.now(), speed, accuracy, isOffRoute);
+                persistTrackProgress();
                 
                 // ==========================================
                 // DETECÇÃO DE DESVIO DE ROTA (REROUTING)
@@ -7183,12 +7313,14 @@
                                 distanceKm: Number(distanceKm.toFixed(2)),
                                 durationMin,
                                 status: 'completed',
+                                trackPath: compressPathData(navigationState.actualTrackPoints || []),
                                 updatedAt: endIso
                             };
                             await db.routeSessions.put(updated);
                             addToSyncQueue('update', 'routeSessions', sessionId, updated);
                         }
                     }
+                    await clearActiveNavigationState();
                 } catch (e) {
                     console.warn('Falha ao finalizar sessão de rota:', e);
                 }
@@ -8810,6 +8942,109 @@
             } catch (e) {
                 console.error('Falha ao exportar sessões:', e);
                 showToast('Falha ao exportar sessões', 'error');
+            }
+        }
+        
+        async function showRouteSessionHistory(sessionId) {
+            try {
+                const id = sessionId ? parseInt(sessionId) : null;
+                if (id === null || isNaN(id)) return;
+                
+                const session = await db.routeSessions.get(id);
+                if (!session) {
+                    showToast('Sessão não encontrada', 'error');
+                    return;
+                }
+                
+                const route = session.routeId ? await db.routes.get(parseInt(session.routeId)) : null;
+                if (!route) {
+                    showToast('Rota não encontrada', 'error');
+                    return;
+                }
+                
+                if (route.path && route.path._compressed) {
+                    route.path = decompressPathData(route.path);
+                }
+                
+                const plannedPoints = Array.isArray(route.path) ? route.path : [];
+                const trackPointsRaw = session.trackPath ? decompressPathData(session.trackPath) : [];
+                const trackPoints = Array.isArray(trackPointsRaw) ? trackPointsRaw : [];
+                
+                const front = session.frontId ? await db.harvestFronts.get(session.frontId) : null;
+                const farm = session.farmId ? await db.farms.get(session.farmId) : null;
+                
+                const content = `
+                    <div class="space-y-3">
+                        <div class="text-sm text-gray-700 dark:text-gray-300">
+                            <div><span class="font-medium">Motorista:</span> ${session.driverId || '-'}</div>
+                            <div><span class="font-medium">Rota:</span> ${route.name || `Rota #${route.id}`}</div>
+                            <div><span class="font-medium">Fazenda:</span> ${farm?.name || '-'}</div>
+                            <div><span class="font-medium">Frente:</span> ${front?.name || '-'}</div>
+                            <div><span class="font-medium">Início:</span> ${session.startTime ? new Date(session.startTime).toLocaleString() : '-'}</div>
+                            <div><span class="font-medium">Fim:</span> ${session.endTime ? new Date(session.endTime).toLocaleString() : '-'}</div>
+                            <div><span class="font-medium">Tempo:</span> ${session.durationMin != null ? minutesToHM(session.durationMin) : '-'}</div>
+                            <div><span class="font-medium">KM:</span> ${session.distanceKm != null ? Number(session.distanceKm).toFixed(2) : '-'}</div>
+                        </div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">
+                            Azul: rota cadastrada · Verde: trajeto feito · Vermelho: fora da rota
+                        </div>
+                        <div id="route-session-history-map" class="w-full rounded-lg overflow-hidden bg-gray-200 dark:bg-gray-700" style="height: 60vh;"></div>
+                    </div>
+                `;
+                
+                showModal('Histórico do Trajeto', content, [
+                    { text: 'Fechar', primary: true }
+                ]);
+                
+                setTimeout(() => {
+                    try {
+                        const el = document.getElementById('route-session-history-map');
+                        if (!el) return;
+                        const first = plannedPoints[0] || trackPoints[0];
+                        if (!first) return;
+                        
+                        const map = L.map(el, { zoomControl: true, attributionControl: false, zoomSnap: 0.5 }).setView([first.lat, first.lng], 15);
+                        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+                        const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 22, maxNativeZoom: 17 });
+                        esri.addTo(map);
+                        L.control.layers({ 'Satélite': esri, 'Estradas': osm }, null, { collapsed: true }).addTo(map);
+                        
+                        const bounds = [];
+                        
+                        if (plannedPoints.length > 1) {
+                            const latLngs = plannedPoints.map(p => [p.lat, p.lng]);
+                            L.polyline(latLngs, { color: '#3b82f6', weight: 7, opacity: 0.85 }).addTo(map);
+                            latLngs.forEach(ll => bounds.push(ll));
+                        }
+                        
+                        if (trackPoints.length > 0) {
+                            let current = null;
+                            let currentOff = null;
+                            const group = L.featureGroup().addTo(map);
+                            trackPoints.forEach(pt => {
+                                const ll = [pt.lat, pt.lng];
+                                bounds.push(ll);
+                                const off = !!pt.offRoute;
+                                if (!current || currentOff !== off) {
+                                    current = L.polyline([ll], { color: off ? '#ef4444' : '#22c55e', weight: 6, opacity: 0.9 });
+                                    currentOff = off;
+                                    current.addTo(group);
+                                } else {
+                                    current.addLatLng(ll);
+                                }
+                            });
+                        }
+                        
+                        if (bounds.length > 1) {
+                            map.fitBounds(bounds, { padding: [20, 20] });
+                        }
+                        
+                        setTimeout(() => map.invalidateSize(), 100);
+                    } catch (e) {}
+                }, 60);
+            } catch (e) {
+                console.error('Erro ao abrir histórico de trajeto:', e);
+                showToast('Erro ao abrir histórico de trajeto', 'error');
             }
         }
 
@@ -11651,10 +11886,11 @@
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Min</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">KM</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Ações</th>
                                     </tr>
                                 </thead>
                                 <tbody id="admin-sessions-body" class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                                    <tr><td colspan="9" class="px-6 py-4 text-center">Carregando...</td></tr>
+                                    <tr><td colspan="10" class="px-6 py-4 text-center">Carregando...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -11761,6 +11997,11 @@
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">${s.distanceKm != null ? Number(s.distanceKm).toFixed(2) : '-'}</td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm">
                                         <span class="status-badge ${getStatusClass(s.status || 'active')}">${getStatusText(s.status || 'active')}</span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                        <button onclick="showRouteSessionHistory(${s.id})" class="px-3 py-1 bg-primary-500 hover:bg-primary-600 text-white rounded-md text-sm">
+                                            Ver Trajeto
+                                        </button>
                                     </td>
                                 `;
                                 sBody.appendChild(tr);
